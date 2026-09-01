@@ -1,0 +1,19 @@
+[[projects]]
+id = "backend"
+path = "../workspace_backend"
+
+[[projects]]
+id = "web"
+path = "../workspace_web"
+
+[[projects]]
+id = "reporting"
+path = "../workspace_reporting"
+
+[[links]]
+produces = "backend:PaymentCreated"
+consumes = "web"
+
+[[links]]
+produces = "backend"
+consumes = "web"

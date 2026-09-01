@@ -1,0 +1,3 @@
+[detectors.events]
+strategy = "naming_convention"
+naming_suffix = "Event"

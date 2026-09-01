@@ -1,0 +1,34 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/impact-core",
+    "crates/impact-lang-rust",
+    "crates/impact-lang-ts",
+    "crates/impact-cli",
+]
+exclude = ["crates/impact-cli/tests/fixtures"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/AncientiCe/impact-rs"
+rust-version = "1.82"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+blake3 = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+ignore = "0.4"
+globset = "0.4"
+tree-sitter = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+
+[profile.release]
+opt-level = 3

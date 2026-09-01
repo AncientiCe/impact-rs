@@ -1,0 +1,4 @@
+/target
+.impact/
+*.sqlite
+*.sqlite-journal
