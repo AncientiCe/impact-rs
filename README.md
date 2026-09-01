@@ -52,13 +52,13 @@ brew install ancientice/impact/impact
 **macOS / Linux (install script):**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AncientiCe/impact-rs/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/AncientiCe/impact-rs/master/scripts/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/AncientiCe/impact-rs/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/AncientiCe/impact-rs/master/scripts/install.ps1 | iex
 ```
 
 **From source (any platform, requires Rust):**
