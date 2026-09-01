@@ -76,8 +76,10 @@ jobs:
           sed -i "s/impact-[0-9][0-9.]*-x86_64-unknown-linux-gnu/impact-${VERSION}-x86_64-unknown-linux-gnu/g" Formula/impact.rb
 
           # Update SHA256 hashes in declaration order: macOS ARM64, macOS Intel, Linux.
+          # Match only real `sha256 "..."` lines, not the word appearing in a comment
+          # (e.g. the seed formula's placeholder note), which would shift every index.
           awk -v arm="${MACOS_ARM_SHA}" -v intel="${MACOS_INTEL_SHA}" -v linux="${LINUX_SHA}" '
-            /sha256/ {
+            /^\s*sha256 "/ {
               n++
               if (n == 1) { sub(/sha256 ".*"/, "sha256 \"" arm "\"") }
               else if (n == 2) { sub(/sha256 ".*"/, "sha256 \"" intel "\"") }
