@@ -41,6 +41,34 @@ API/EVENTS/DATABASE contract detection (axum/sqlx/event conventions) is currentl
 
 Structural resolution, not a compiler: `impact` parses source with [tree-sitter](https://tree-sitter.github.io/tree-sitter/), extracts symbols and call sites, and resolves references by name (exact qualified path first, falling back to a bare short name when a call site doesn't fully qualify its target). It doesn't type-check, so it can't always tell which of several same-named candidates a call resolves to — when that happens, it reports *all* of them rather than guessing wrong and staying silent. A blast-radius tool should over-report, not under-report: a false positive is visible and easy to dismiss, a false negative is invisible and costs you later.
 
+## Installation
+
+**macOS / Linux (Homebrew):**
+
+```bash
+brew install ancientice/impact/impact
+```
+
+**macOS / Linux (install script):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AncientiCe/impact-rs/main/scripts/install.sh | sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/AncientiCe/impact-rs/main/scripts/install.ps1 | iex
+```
+
+**From source (any platform, requires Rust):**
+
+```bash
+cargo install --git https://github.com/AncientiCe/impact-rs --locked impact-cli
+```
+
+Prebuilt binaries and the Homebrew tap are populated by [`.github/workflows/release.yml`](.github/workflows/release.yml) on each tagged release (linux x86_64, macOS x86_64/arm64, Windows x86_64); `cargo install --git` always works off the latest source. `impact` is not yet published to crates.io.
+
 ## Quick start
 
 ```bash

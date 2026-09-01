@@ -1,0 +1,110 @@
+name: Update Homebrew Formula
+
+# Runs after the Release workflow finishes. A `release: published` trigger does
+# NOT fire here, because that release is created by the Release workflow using
+# the default GITHUB_TOKEN, and GitHub never starts new workflow runs from
+# GITHUB_TOKEN-triggered events. `workflow_run` is not subject to that rule, so
+# it reliably chains after a tagged release build. `workflow_dispatch` is a
+# manual fallback (pass the tag, e.g. v0.2.0).
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag to publish to Homebrew (e.g. v0.2.0)"
+        required: true
+
+jobs:
+  update-formula:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+
+    steps:
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RAW="${{ github.event.inputs.version }}"
+          else
+            # For tag-triggered runs, head_branch is the tag name (e.g. v0.2.0).
+            RAW="${{ github.event.workflow_run.head_branch }}"
+          fi
+          VERSION="${RAW#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${VERSION}"
+
+      - name: Download checksums
+        id: checksums
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+
+          MACOS_ARM_CHECKSUM=$(curl -fsSL "https://github.com/AncientiCe/impact-rs/releases/download/v${VERSION}/impact-aarch64-apple-darwin.sha256" | awk '{print $1}')
+          echo "macos_arm_sha256=${MACOS_ARM_CHECKSUM}" >> $GITHUB_OUTPUT
+          echo "macOS ARM64 SHA256: ${MACOS_ARM_CHECKSUM}"
+
+          MACOS_INTEL_CHECKSUM=$(curl -fsSL "https://github.com/AncientiCe/impact-rs/releases/download/v${VERSION}/impact-x86_64-apple-darwin.sha256" | awk '{print $1}')
+          echo "macos_intel_sha256=${MACOS_INTEL_CHECKSUM}" >> $GITHUB_OUTPUT
+          echo "macOS Intel SHA256: ${MACOS_INTEL_CHECKSUM}"
+
+          LINUX_CHECKSUM=$(curl -fsSL "https://github.com/AncientiCe/impact-rs/releases/download/v${VERSION}/impact-x86_64-unknown-linux-gnu.sha256" | awk '{print $1}')
+          echo "linux_sha256=${LINUX_CHECKSUM}" >> $GITHUB_OUTPUT
+          echo "Linux x86_64 SHA256: ${LINUX_CHECKSUM}"
+
+      - name: Checkout homebrew-impact
+        uses: actions/checkout@v4
+        with:
+          repository: AncientiCe/homebrew-impact
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-impact
+
+      - name: Update formula
+        run: |
+          cd homebrew-impact
+          VERSION=${{ steps.version.outputs.version }}
+          MACOS_ARM_SHA=${{ steps.checksums.outputs.macos_arm_sha256 }}
+          MACOS_INTEL_SHA=${{ steps.checksums.outputs.macos_intel_sha256 }}
+          LINUX_SHA=${{ steps.checksums.outputs.linux_sha256 }}
+
+          sed -i "s|download/v[0-9][0-9.]*|download/v${VERSION}|g" Formula/impact.rb
+          sed -i "s/impact-[0-9][0-9.]*-aarch64-apple-darwin/impact-${VERSION}-aarch64-apple-darwin/g" Formula/impact.rb
+          sed -i "s/impact-[0-9][0-9.]*-x86_64-apple-darwin/impact-${VERSION}-x86_64-apple-darwin/g" Formula/impact.rb
+          sed -i "s/impact-[0-9][0-9.]*-x86_64-unknown-linux-gnu/impact-${VERSION}-x86_64-unknown-linux-gnu/g" Formula/impact.rb
+
+          # Update SHA256 hashes in declaration order: macOS ARM64, macOS Intel, Linux.
+          awk -v arm="${MACOS_ARM_SHA}" -v intel="${MACOS_INTEL_SHA}" -v linux="${LINUX_SHA}" '
+            /sha256/ {
+              n++
+              if (n == 1) { sub(/sha256 ".*"/, "sha256 \"" arm "\"") }
+              else if (n == 2) { sub(/sha256 ".*"/, "sha256 \"" intel "\"") }
+              else if (n == 3) { sub(/sha256 ".*"/, "sha256 \"" linux "\"") }
+            }
+            { print }
+          ' Formula/impact.rb > Formula/impact.rb.tmp
+          mv Formula/impact.rb.tmp Formula/impact.rb
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-impact
+          commit-message: "impact ${{ steps.version.outputs.version }}"
+          title: "Update impact to ${{ steps.version.outputs.version }}"
+          body: |
+            Automated update for impact v${{ steps.version.outputs.version }}
+
+            **Changes:**
+            - Version: ${{ steps.version.outputs.version }}
+            - macOS ARM64 SHA256: `${{ steps.checksums.outputs.macos_arm_sha256 }}`
+            - macOS Intel SHA256: `${{ steps.checksums.outputs.macos_intel_sha256 }}`
+            - Linux x86_64 SHA256: `${{ steps.checksums.outputs.linux_sha256 }}`
+
+            **Release:** https://github.com/AncientiCe/impact-rs/releases/tag/v${{ steps.version.outputs.version }}
+
+            Please review and merge if the checksums are correct.
+          branch: update-v${{ steps.version.outputs.version }}
+          delete-branch: true

@@ -1,0 +1,161 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive_ext: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive_ext: tar.gz
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive_ext: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive_ext: zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Build release binary
+        run: cargo build --release --locked -p impact-cli --target ${{ matrix.target }}
+
+      - name: Package Unix artifact
+        if: matrix.archive_ext == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          asset="impact-${version}-${{ matrix.target }}"
+          mkdir -p "dist/${asset}"
+          cp "target/${{ matrix.target }}/release/impact" "dist/${asset}/"
+          strip "dist/${asset}/impact" || true
+          cp README.md LICENSE CHANGELOG.md "dist/${asset}/"
+          tar -C dist -czf "dist/${asset}.tar.gz" "${asset}"
+
+      - name: Package Windows artifact
+        if: matrix.archive_ext == 'zip'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart("v")
+          $asset = "impact-$version-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "dist/$asset" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/impact.exe" "dist/$asset/"
+          Copy-Item README.md,LICENSE,CHANGELOG.md "dist/$asset/"
+          Compress-Archive -Path "dist/$asset/*" -DestinationPath "dist/$asset.zip"
+
+      - name: Generate Unix checksum
+        if: matrix.archive_ext == 'tar.gz'
+        shell: bash
+        run: |
+          cd dist
+          asset="$(ls impact-*-${{ matrix.target }}.tar.gz)"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$asset" > impact-${{ matrix.target }}.sha256
+          else
+            shasum -a 256 "$asset" > impact-${{ matrix.target }}.sha256
+          fi
+
+      - name: Generate Windows checksum
+        if: matrix.archive_ext == 'zip'
+        shell: pwsh
+        run: |
+          $asset = Get-ChildItem -Path dist -Filter "impact-*-${{ matrix.target }}.zip" | Select-Object -First 1
+          $hash = (Get-FileHash -Algorithm SHA256 $asset.FullName).Hash.ToLowerInvariant()
+          "$hash  $($asset.Name)" | Out-File -FilePath "dist/impact-${{ matrix.target }}.sha256" -Encoding ascii
+
+      - name: Extract release notes from changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          notes="dist/release-notes.md"
+          awk -v version="$version" '
+            index($0, "## [" version "] - ") == 1 {
+              in_section = 1
+              print
+              next
+            }
+            in_section && /^## \[/ {
+              exit
+            }
+            in_section {
+              print
+            }
+          ' CHANGELOG.md > "$notes"
+          if [ ! -s "$notes" ]; then
+            {
+              echo "Release ${GITHUB_REF_NAME}"
+              echo
+              echo "No matching CHANGELOG.md section found for ${GITHUB_REF_NAME}."
+            } > "$notes"
+          fi
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: dist/release-notes.md
+          files: |
+            dist/impact-*-${{ matrix.target }}.${{ matrix.archive_ext }}
+            dist/impact-${{ matrix.target }}.sha256
+
+  # End-to-end smoke of the published release: the install script must detect
+  # the platform, download the real asset, verify its checksum, and install.
+  install-smoke:
+    name: Release install smoke (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install from published release (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          IMPACT_VERSION: ${{ github.ref_name }}
+          IMPACT_INSTALL_DIR: ${{ runner.temp }}/impact-bin
+        run: |
+          sh scripts/install.sh
+          "$IMPACT_INSTALL_DIR/impact" --version
+      - name: Install from published release (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          IMPACT_VERSION: ${{ github.ref_name }}
+          IMPACT_INSTALL_DIR: ${{ runner.temp }}\impact-bin
+        run: |
+          .\scripts\install.ps1
+          & "$env:IMPACT_INSTALL_DIR\impact.exe" --version

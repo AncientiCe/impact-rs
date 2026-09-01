@@ -105,3 +105,81 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Build workspace (locked)
         run: cargo build --workspace --locked
+
+  # Exercises scripts/install.sh (Linux, macOS) and scripts/install.ps1 (Windows)
+  # against a binary built fresh in this job, via each script's IMPACT_VERSION=local
+  # escape hatch — so the real install path is proven on every push, not just at
+  # release time (release.yml's install-smoke job separately proves the same
+  # scripts against a real published GitHub Release, once one exists).
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-install-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Build release binary
+        run: cargo build --release --locked -p impact-cli --target ${{ matrix.target }}
+      - name: Package archive (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cd target/${{ matrix.target }}/release
+          tar czf "$GITHUB_WORKSPACE/dist/impact-local.tar.gz" impact
+      - name: Package archive (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "target/${{ matrix.target }}/release/impact.exe" -DestinationPath "dist/impact-local.zip"
+      - name: Run scripts/install.sh
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          IMPACT_VERSION: local
+          IMPACT_LOCAL_ARCHIVE: dist/impact-local.tar.gz
+          IMPACT_INSTALL_DIR: ${{ runner.temp }}/impact-bin
+        run: |
+          sh scripts/install.sh
+          echo "${{ runner.temp }}/impact-bin" >> "$GITHUB_PATH"
+      - name: Run scripts/install.ps1
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          IMPACT_VERSION: local
+          IMPACT_LOCAL_ARCHIVE: dist/impact-local.zip
+          IMPACT_INSTALL_DIR: ${{ runner.temp }}\impact-bin
+        run: |
+          .\scripts\install.ps1
+          "${{ runner.temp }}\impact-bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Verify installed binary runs
+        shell: bash
+        run: impact --version
+      - name: Smoke test installed binary against a real fixture
+        shell: bash
+        run: |
+          tmp_cache="$(mktemp -d)"
+          impact index crates/impact-cli/tests/fixtures/toy_crate --cache-dir "$tmp_cache"
+          impact query crates/impact-cli/tests/fixtures/toy_crate/src/lib.rs --project crates/impact-cli/tests/fixtures/toy_crate --cache-dir "$tmp_cache"

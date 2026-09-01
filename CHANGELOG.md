@@ -6,6 +6,7 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ### Added
 
+- Installation: `scripts/install.sh` / `scripts/install.ps1` (download, checksum-verify, and install a release binary, or install from a local archive via `IMPACT_VERSION=local`), a tag-triggered `.github/workflows/release.yml` building linux x86_64 / macOS x86_64+arm64 / Windows x86_64 binaries with checksums, and `.github/workflows/update-homebrew.yml` which opens a PR against the [`homebrew-impact`](https://github.com/AncientiCe/homebrew-impact) tap after each release. CI's `install` job runs the install scripts against a freshly built binary on Linux, macOS, and Windows on every push; `release.yml`'s `install-smoke` job additionally proves them against a real published release on all three OSes.
 - Project rules (`AGENTS.md`, `CLAUDE.md`): TDD via behavior tests only, quality gates (fmt/clippy/audit/test/build), internal API discipline, no mocks/placeholders/unsafe unwrap, changelog discipline.
 - Quality gate tooling: `Makefile` (`make check` running all five gates) and CI (`.github/workflows/ci.yml`, one job per gate).
 - Phase 0 scaffolding: Cargo workspace with `impact-core` (language-agnostic symbol graph, `LanguageAdapter` trait, SQLite-backed cache with content-hash-gated re-indexing, file-walking indexer), `impact-lang-rust` (tree-sitter-based Rust adapter extracting functions/structs/enums/traits with approximate module-path qualification), and `impact-cli` (the `impact` binary's `index` subcommand).
