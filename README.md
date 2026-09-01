@@ -220,6 +220,18 @@ A `[[links]]` entry naming the exact contract on one side gives a `Declared` mat
 | [`impact-lang-swift`](crates/impact-lang-swift) | Functions, classes, methods, XCTest (`XCTestCase` inheritance) test detection. |
 | [`impact-cli`](crates/impact-cli) | The `impact` binary — CLI subcommands and the MCP server, both built on one shared computation layer (`ops.rs`) so they can never drift from each other. |
 
+## Performance
+
+Measured with a release build (`cargo build --release`) against a real ~50k-line Rust + TypeScript workspace (207 files, 2,249 indexed symbols), on a desktop-class CPU (AMD Ryzen 7 7800X3D):
+
+| Operation | Time |
+|---|---|
+| `impact index` (cold, full parse) | ~1.6s |
+| `impact index` (re-run, nothing changed — content-hash skip) | ~0.1s |
+| `impact query` (single file, warm cache) | ~35-40ms |
+
+One machine, one project — treat these as an order-of-magnitude sense of cost, not a guarantee. The re-index number is the one that matters most in practice: an agent calling `impact_index` before every edit (per the Blast-Radius Protocol above) pays the cold-parse cost once and the ~0.1s content-hash-skip cost on every call after, as long as most files haven't changed.
+
 ## Development
 
 See [`AGENTS.md`](AGENTS.md) for the full rules this project holds itself to: TDD via behavior tests only (real fixture projects, real CLI/MCP invocations — no internal-function unit tests), five quality gates, no mocks/placeholders/unsafe `unwrap`, changelog discipline.
