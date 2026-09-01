@@ -51,14 +51,17 @@ fn query(cache_dir: &Path, file: &str) -> Value {
 /// TypeScript chain, hand-traced from the source: `util.ts` exports `helper`; `service.ts`
 /// imports and calls it from `process`; `caller.ts` imports `process` and calls it from
 /// `Runner.run` (a class method — also exercises `class_declaration`/`method_definition`
-/// extraction). 5 symbols total: `rust_side`, `helper`, `process`, `Runner`, `Runner::run`.
+/// extraction) — plus a separate `.tsx`/`.jsx` chain (`widgetLabel.ts`/`Widget.tsx`/
+/// `PlainWidget.jsx`, see `jsx_and_tsx_call_sites_resolve_across_files` below). 8 symbols
+/// total: `rust_side`, `helper`, `process`, `Runner`, `Runner::run`, `label`, `Widget::Widget`,
+/// `PlainWidget::PlainWidget`.
 #[test]
 fn typescript_adapter_resolves_calls_across_files() {
     let cache_dir = tempfile::tempdir().unwrap();
 
     let stats = index(cache_dir.path());
-    assert_eq!(stats["files_indexed"], 4);
-    assert_eq!(stats["symbols_indexed"], 5);
+    assert_eq!(stats["files_indexed"], 7);
+    assert_eq!(stats["symbols_indexed"], 8);
 
     let report = query(cache_dir.path(), "src/util.ts");
     assert_eq!(report["direct"], serde_json::json!(["service::process"]));
@@ -66,6 +69,30 @@ fn typescript_adapter_resolves_calls_across_files() {
         report["indirect"],
         serde_json::json!(["caller::Runner::run"])
     );
+}
+
+/// React and React Native are TypeScript/JavaScript with JSX, not a separate language —
+/// `TsAdapter` handles `.tsx`/`.jsx` by picking the TSX grammar per file (see the crate's
+/// module doc), reusing 100% of the existing extraction logic. `widgetLabel.ts` exports
+/// `label`; `Widget.tsx` (a `.tsx` function component) and `PlainWidget.jsx` (plain
+/// JS+JSX, no TypeScript syntax) each call it from inside a JSX expression
+/// (`{label()}`) — proving both the TSX grammar and the plain-JS-via-TSX-grammar path
+/// resolve calls hidden inside JSX exactly like a normal function body. Qualified paths
+/// are self-referential (`Widget::Widget`, `PlainWidget::PlainWidget`) because each file
+/// is its own module segment (this adapter's documented convention) and both files are
+/// named after the component they export — a genuinely common real-world React pattern,
+/// not a bug.
+#[test]
+fn jsx_and_tsx_call_sites_resolve_across_files() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    index(cache_dir.path());
+
+    let report = query(cache_dir.path(), "src/widgetLabel.ts");
+    assert_eq!(
+        report["direct"],
+        serde_json::json!(["PlainWidget::PlainWidget", "Widget::Widget"])
+    );
+    assert_eq!(report["indirect"], serde_json::json!([]));
 }
 
 /// The Rust file in the same project is indexed by `RustAdapter` as normal, entirely

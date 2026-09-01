@@ -371,7 +371,11 @@ dependencies = [
  "assert_cmd",
  "clap",
  "impact-core",
+ "impact-lang-go",
+ "impact-lang-kotlin",
+ "impact-lang-python",
  "impact-lang-rust",
+ "impact-lang-swift",
  "impact-lang-ts",
  "predicates",
  "serde",
@@ -397,6 +401,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "impact-lang-go"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "impact-core",
+ "tempfile",
+ "tree-sitter",
+ "tree-sitter-go",
+]
+
+[[package]]
+name = "impact-lang-kotlin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "impact-core",
+ "tempfile",
+ "tree-sitter",
+ "tree-sitter-kotlin-ng",
+]
+
+[[package]]
+name = "impact-lang-python"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "impact-core",
+ "tempfile",
+ "tree-sitter",
+ "tree-sitter-python",
+]
+
+[[package]]
 name = "impact-lang-rust"
 version = "0.1.0"
 dependencies = [
@@ -405,6 +442,17 @@ dependencies = [
  "tempfile",
  "tree-sitter",
  "tree-sitter-rust",
+]
+
+[[package]]
+name = "impact-lang-swift"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "impact-core",
+ "tempfile",
+ "tree-sitter",
+ "tree-sitter-swift",
 ]
 
 [[package]]
@@ -821,16 +869,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-go"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8560a4d2f835cc0d4d2c2e03cbd0dde2f6114b43bc491164238d333e28b16ea"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-kotlin-ng"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e800ebbda938acfbf224f4d2c34947a31994b1295ee6e819b65226c7b51b4450"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-language"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca0d1bf6fdd806e43ae5198f82f527056d359def39e54e67a0f478ac09dac081"
 
 [[package]]
+name = "tree-sitter-python"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bf85fd39652e740bf60f46f4cda9492c3a9ad75880575bf14960f775cb74a1c"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-rust"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439e577dbe07423ec2582ac62c7531120dbfccfa6e5f92406f93dd271a120e45"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-swift"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe36052155b9dd69ca82b3b8f1b4ccfb2d867125ac1a4db1dd7331829242668c"
 dependencies = [
  "cc",
  "tree-sitter-language",

@@ -1,9 +1,23 @@
-//! A TypeScript `LanguageAdapter` — the second language adapter this project ships,
-//! written specifically to prove `impact-core`'s adapter boundary actually holds: nothing
-//! here required a single change to `impact-core`, `impact-cli`, the graph model, the
-//! linker, the blast-radius engine, or the MCP surface. Register a `TsAdapter` alongside
-//! `RustAdapter` in the same `Indexer` and both languages get indexed, queried, and
-//! `--change`-resolved through the exact same machinery.
+//! A TypeScript/JavaScript `LanguageAdapter` — the second language adapter this project
+//! ships, written specifically to prove `impact-core`'s adapter boundary actually holds:
+//! nothing here required a single change to `impact-core`, `impact-cli`, the graph model,
+//! the linker, the blast-radius engine, or the MCP surface. Register a `TsAdapter`
+//! alongside `RustAdapter` in the same `Indexer` and both languages get indexed, queried,
+//! and `--change`-resolved through the exact same machinery.
+//!
+//! Also covers React and React Native: both are TypeScript/JavaScript with JSX, not a
+//! separate language, so `.tsx`/`.jsx`/`.js`/`.mjs` are handled by widening this same
+//! adapter rather than writing a new one. Confirmed empirically before adding them:
+//! `tree-sitter-typescript`'s TSX grammar parses plain JSX-containing JavaScript (no
+//! TS-specific syntax at all) with zero parse errors, producing the exact same node kinds
+//! (`function_declaration`, `call_expression` reachable inside a `jsx_element` via the
+//! existing generic recursion below) this adapter already handles — so no new extraction
+//! logic was needed, only `parse_file` choosing the right grammar per file. `.ts` files
+//! still get the plain TypeScript grammar rather than TSX for all files uniformly,
+//! because the two genuinely disagree on `<Foo>bar`: the TypeScript grammar accepts it as
+//! a legacy type-assertion cast, while the TSX grammar must treat a leading `<` as the
+//! start of a JSX element to support JSX at all — real syntax used in real `.ts` files
+//! that predates `as Foo`, so `.ts` keeps the grammar that doesn't misparse it.
 //!
 //! Deliberately scoped down relative to `impact-lang-rust`: functions, classes, and
 //! methods (`extract_symbols`), and calls including simple method calls
@@ -22,8 +36,15 @@ use tree_sitter::Node;
 pub struct TsAdapter;
 
 impl TsAdapter {
-    fn language() -> tree_sitter::Language {
-        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+    /// `.ts` gets the plain TypeScript grammar (see the module doc for why); every other
+    /// extension this adapter claims (`.tsx`/`.jsx`/`.js`/`.mjs`) gets the TSX grammar,
+    /// which is a strict enough superset to parse plain JS/JSX cleanly too.
+    fn language_for(path: &Path) -> tree_sitter::Language {
+        if path.extension().and_then(|e| e.to_str()) == Some("ts") {
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+        } else {
+            tree_sitter_typescript::LANGUAGE_TSX.into()
+        }
     }
 }
 
@@ -33,12 +54,12 @@ impl LanguageAdapter for TsAdapter {
     }
 
     fn file_globs(&self) -> &[&str] {
-        &["**/*.ts"]
+        &["**/*.ts", "**/*.tsx", "**/*.jsx", "**/*.js", "**/*.mjs"]
     }
 
     fn parse_file(&self, path: &Path, source: &str) -> anyhow::Result<FileAst> {
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&Self::language())?;
+        parser.set_language(&Self::language_for(path))?;
         let tree = parser
             .parse(source, None)
             .ok_or_else(|| anyhow::anyhow!("tree-sitter failed to parse {}", path.display()))?;
@@ -87,7 +108,10 @@ impl LanguageAdapter for TsAdapter {
 fn module_prefix(rel_path: &str) -> String {
     let path = rel_path.replace('\\', "/");
     let path = path.strip_prefix("src/").unwrap_or(&path);
-    let path = path.strip_suffix(".ts").unwrap_or(path);
+    let path = [".tsx", ".ts", ".jsx", ".mjs", ".js"]
+        .iter()
+        .find_map(|ext| path.strip_suffix(ext))
+        .unwrap_or(path);
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     segments.join("::")
 }

@@ -9,7 +9,11 @@ use impact_core::{
     Cache, ChangeSpec, DetectorConfig, ImpactReport, IndexStats, Indexer, LanguageAdapter,
     Workspace, WorkspaceImpactReport,
 };
+use impact_lang_go::GoAdapter;
+use impact_lang_kotlin::KotlinAdapter;
+use impact_lang_python::PythonAdapter;
 use impact_lang_rust::RustAdapter;
+use impact_lang_swift::SwiftAdapter;
 use impact_lang_ts::TsAdapter;
 
 fn cache_path(project_root: &Path, cache_dir: Option<&Path>) -> PathBuf {
@@ -34,7 +38,18 @@ pub fn index_project(
     let config = DetectorConfig::load(&project_root)?;
     let rust_adapter = RustAdapter::new(config);
     let ts_adapter = TsAdapter;
-    let adapters: Vec<&dyn LanguageAdapter> = vec![&rust_adapter, &ts_adapter];
+    let python_adapter = PythonAdapter;
+    let go_adapter = GoAdapter;
+    let kotlin_adapter = KotlinAdapter;
+    let swift_adapter = SwiftAdapter;
+    let adapters: Vec<&dyn LanguageAdapter> = vec![
+        &rust_adapter,
+        &ts_adapter,
+        &python_adapter,
+        &go_adapter,
+        &kotlin_adapter,
+        &swift_adapter,
+    ];
     let indexer = Indexer::new(project_id, adapters);
 
     indexer.index(&project_root, &mut cache)

@@ -18,6 +18,10 @@ path = "src/main.rs"
 impact-core = { path = "../impact-core" }
 impact-lang-rust = { path = "../impact-lang-rust" }
 impact-lang-ts = { path = "../impact-lang-ts" }
+impact-lang-python = { path = "../impact-lang-python" }
+impact-lang-go = { path = "../impact-lang-go" }
+impact-lang-kotlin = { path = "../impact-lang-kotlin" }
+impact-lang-swift = { path = "../impact-lang-swift" }
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true

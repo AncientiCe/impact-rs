@@ -33,7 +33,9 @@ TESTS
 - **`impact mcp`** — an MCP stdio server exposing `impact_index` / `impact_file` / `impact_change` as tools, so an agent can call this directly instead of reading the whole codebase to guess what a change affects.
 - **Cross-project impact** — register sibling repos in a `workspace.toml` and `--workspace` extends a report with which *other* projects share the same API route / event / table identity, confidence-tiered (`Declared` / `Strong` / `Weak`) so identity coincidences don't masquerade as real dependencies.
 
-Supports Rust and TypeScript today. The core (`impact-core`) is language-agnostic by design — each language is a pluggable adapter (tree-sitter-based symbol/call extraction), and adding another language means writing one more adapter crate, not touching the engine, linker, or MCP surface. See [`impact-lang-ts`](crates/impact-lang-ts) — it was built specifically to prove that boundary holds.
+Supports Rust, TypeScript/TSX (React), JavaScript/JSX (React Native), Python, Go, Kotlin (Android), and Swift today. The core (`impact-core`) is language-agnostic by design — each language is a pluggable adapter (tree-sitter-based symbol/call extraction), and adding another language means writing one more adapter crate, not touching the engine, linker, or MCP surface. Every adapter after the first (Rust) proved that boundary holds by adding zero lines to `impact-core`.
+
+API/EVENTS/DATABASE contract detection (axum/sqlx/event conventions) is currently Rust-only; the other six languages get DIRECT/INDIRECT/TESTS. Test detection follows whatever convention a language actually has one unambiguous answer for — pytest's `test`-prefix, `go test`'s `TestXxx` in `_test.go`, JUnit's `@Test`, XCTest's `test`-prefixed `XCTestCase` methods — and is intentionally left off for TypeScript/JavaScript, where Jest/Vitest/Mocha disagree.
 
 ## How it works
 
@@ -138,7 +140,11 @@ A `[[links]]` entry naming the exact contract on one side gives a `Declared` mat
 |---|---|
 | [`impact-core`](crates/impact-core) | Language-agnostic symbol graph, `LanguageAdapter`/`ContractRef` traits, SQLite-backed cache, linker, blast-radius engine, `--change` grammar, workspace/cross-project matching. Depends on the generic `tree-sitter` crate, never a specific grammar. |
 | [`impact-lang-rust`](crates/impact-lang-rust) | The Rust adapter: functions, types, traits, enum variants, match-arm references, axum/sqlx/event contract detectors. |
-| [`impact-lang-ts`](crates/impact-lang-ts) | The TypeScript adapter: functions, classes, methods, cross-file call resolution. Proof that a second language needs zero `impact-core` changes. |
+| [`impact-lang-ts`](crates/impact-lang-ts) | TypeScript/TSX and JavaScript/JSX (React, React Native): functions, classes, methods, cross-file call resolution — including calls hidden inside JSX expressions. |
+| [`impact-lang-python`](crates/impact-lang-python) | Functions, classes, methods, cross-file call resolution, pytest-style test detection. |
+| [`impact-lang-go`](crates/impact-lang-go) | Functions, types, receiver methods (Go's top-level `method_declaration`, not nested in a class body), `go test`-style test detection. |
+| [`impact-lang-kotlin`](crates/impact-lang-kotlin) | Functions, classes, methods, JUnit `@Test` detection. |
+| [`impact-lang-swift`](crates/impact-lang-swift) | Functions, classes, methods, XCTest (`XCTestCase` inheritance) test detection. |
 | [`impact-cli`](crates/impact-cli) | The `impact` binary — CLI subcommands and the MCP server, both built on one shared computation layer (`ops.rs`) so they can never drift from each other. |
 
 ## Development
