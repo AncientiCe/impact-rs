@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-01
+
 ### Added
 
 - `impact install`/`impact uninstall`/`impact doctor` CLI subcommands: register (or remove) the `impact` MCP server at user (global) or project scope in Cursor (`~/.cursor/mcp.json`), Codex (`~/.codex/config.toml`, via `toml_edit` to preserve comments/formatting), Claude Code (`~/.claude.json`), and Claude Desktop (platform-specific config path; unsupported on Linux) — plus an `impact`-owned agent rule (Cursor: standalone `.cursor/rules/impact.mdc`; Codex/Claude: a managed `<!-- BEGIN IMPACT -->`/`<!-- END IMPACT -->` block in `AGENTS.md`/`CLAUDE.md`) telling the agent to call `impact_index`/`impact_file`/`impact_change` before and after editing code, in every project automatically instead of only ones wired up by hand. `impact doctor` reports per-client configured/missing/rule-installed/rule-current status. `--dry-run`, `--no-rule`, `--scope user|project`, `--home-dir` (portable/non-standard profile support), and `--json` supported across all three subcommands.
