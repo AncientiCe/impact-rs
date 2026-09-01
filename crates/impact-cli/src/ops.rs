@@ -87,6 +87,24 @@ pub fn query_file(
     Ok(impact_core::compute_file_impact(&graph, &rel_file))
 }
 
+/// Diff-mode query: parses a unified diff (e.g. `git diff` output) and computes the blast
+/// radius of every symbol its touched lines fall inside — see
+/// `impact_core::compute_diff_impact` for how "falls inside" is resolved. File paths in
+/// the diff are matched against the index as-is (after the parser's `a/`/`b/` strip), so
+/// the diff needs paths relative to `project` — exactly what `git diff` run inside the
+/// project produces.
+pub fn diff_impact(
+    diff_text: &str,
+    project: Option<&Path>,
+    cache_dir: Option<&Path>,
+) -> anyhow::Result<ImpactReport> {
+    let (_project_root, cache) = open_project_cache(project, cache_dir)?;
+    let graph = cache.load_graph()?;
+    let touches = impact_core::parse_unified_diff(diff_text);
+
+    Ok(impact_core::compute_diff_impact(&graph, &touches))
+}
+
 pub fn apply_change(
     description: &str,
     project: Option<&Path>,

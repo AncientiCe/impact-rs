@@ -30,7 +30,8 @@ TESTS
 - **`impact index <path>`** — indexes a project into a local SQLite cache (content-hash-gated, so unchanged files are skipped on re-index).
 - **`impact query <file>`** — the blast radius of everything declared in one file: direct callers, transitive (indirect) callers, the API routes / event types / database tables the affected code touches, and how many tests exercise any of it.
 - **`impact change "<description>"`** — the same blast radius for a specific symbol-level change, described in a small deterministic grammar (never natural language, so the same input always resolves the same way): `rename <path>`, `remove <path>`, `remove variant <Enum>::<Variant>`, `remove field <Type>.<field>`, `change signature of <path>`.
-- **`impact mcp`** — an MCP stdio server exposing `impact_index` / `impact_file` / `impact_change` as tools, so an agent can call this directly instead of reading the whole codebase to guess what a change affects.
+- **`impact diff`** — the combined blast radius of a unified diff (`git diff | impact diff`, or `impact diff --file some.patch`): every symbol the diff's touched lines fall inside, across every file it mentions, in one call instead of one `impact query` per touched file. Requires the project to be indexed against the diff's *new* side — the working tree as it currently stands, which is what `git diff` on uncommitted changes already matches.
+- **`impact mcp`** — an MCP stdio server exposing `impact_index` / `impact_file` / `impact_change` / `impact_diff` as tools, so an agent can call this directly instead of reading the whole codebase to guess what a change affects.
 - **Cross-project impact** — register sibling repos in a `workspace.toml` and `--workspace` extends a report with which *other* projects share the same API route / event / table identity, confidence-tiered (`Declared` / `Strong` / `Weak`) so identity coincidences don't masquerade as real dependencies.
 
 Supports Rust, TypeScript/TSX (React), JavaScript/JSX (React Native), Python, Go, Kotlin (Android), and Swift today. The core (`impact-core`) is language-agnostic by design — each language is a pluggable adapter (tree-sitter-based symbol/call extraction), and adding another language means writing one more adapter crate, not touching the engine, linker, or MCP surface. Every adapter after the first (Rust) proved that boundary holds by adding zero lines to `impact-core`.
@@ -89,6 +90,7 @@ cargo run -p impact-cli -- mcp
 | `impact index <path> [--force] [--cache-dir <dir>]` | Index (or re-index) a project. `--force` wipes the cache and re-parses everything, ignoring content-hash skips. |
 | `impact query <file> [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|heuristic] [--json]` | Blast radius of a file. |
 | `impact change "<description>" [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|heuristic] [--json]` | Blast radius of one symbol-level change. |
+| `impact diff [--file <path>] [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|heuristic] [--json]` | Blast radius of a unified diff — reads from `--file`, or stdin if omitted. |
 | `impact mcp` | Start the MCP stdio server. Blocks until stdin closes. |
 
 ## `--change` grammar
@@ -111,6 +113,7 @@ Unparseable input is a hard error with a usage hint — never a best-effort gues
 | `impact_index` | Index (or re-index) a project. |
 | `impact_file` | Blast radius of a file, optionally extended with `workspace_path` for cross-project matches; `min_confidence: "exact"\|"heuristic"` filters DIRECT/INDIRECT entries. |
 | `impact_change` | Blast radius of a `--change`-style description, same `workspace_path`/`min_confidence` support. |
+| `impact_diff` | Blast radius of a unified diff (`diff` argument — the raw text, e.g. `git diff` output), same `workspace_path`/`min_confidence` support. |
 
 ```bash
 claude mcp add impact -- impact mcp

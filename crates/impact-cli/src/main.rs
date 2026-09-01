@@ -2,8 +2,10 @@ mod install;
 mod mcp;
 mod ops;
 
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 use impact_core::{Confidence, CrossProjectMatch, ImpactReport};
 
@@ -102,8 +104,37 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Run the MCP stdio server, exposing `impact_index`/`impact_file`/`impact_change` as
-    /// tools for an MCP-speaking agent. Blocks until stdin closes.
+    /// Report the blast radius of an unpushed/uncommitted change, given as a unified diff
+    /// (`git diff` output) — e.g. `git diff | impact diff`. Maps each touched line to the
+    /// symbol it falls inside (see `impact_core::compute_diff_impact`) and reports the
+    /// combined blast radius across every touched symbol in every file the diff mentions.
+    /// Requires the project to have been indexed against the diff's *new* side — i.e. the
+    /// working tree as it currently stands, which is what `git diff` on uncommitted
+    /// changes already matches.
+    Diff {
+        /// Read the diff from this file instead of stdin.
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// Project root the cache was built against (defaults to the current directory).
+        #[arg(long)]
+        project: Option<PathBuf>,
+        /// Where the index cache lives (defaults to `<project>/.impact`).
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// A `workspace.toml` registering sibling projects — when given, also reports
+        /// which of them this diff's API routes/events/tables touch.
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+        /// Only show DIRECT/INDIRECT dependents resolved with at least this confidence —
+        /// `exact` hides anything the linker could only match by ambiguous short name.
+        #[arg(long)]
+        min_confidence: Option<MinConfidence>,
+        /// Print machine-readable JSON instead of the tree-text report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run the MCP stdio server, exposing `impact_index`/`impact_file`/`impact_change`/
+    /// `impact_diff` as tools for an MCP-speaking agent. Blocks until stdin closes.
     Mcp,
     /// Register the impact MCP server, and an agent rule telling the agent to verify
     /// blast radius with it before/after editing code, with local AI coding tools.
@@ -200,6 +231,21 @@ fn main() -> anyhow::Result<()> {
             json,
         } => run_change(
             &description,
+            project.as_deref(),
+            cache_dir.as_deref(),
+            workspace.as_deref(),
+            min_confidence,
+            json,
+        ),
+        Command::Diff {
+            file,
+            project,
+            cache_dir,
+            workspace,
+            min_confidence,
+            json,
+        } => run_diff(
+            file.as_deref(),
             project.as_deref(),
             cache_dir.as_deref(),
             workspace.as_deref(),
@@ -335,6 +381,32 @@ fn print_install_report(
         println!("nothing to do — already up to date");
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_diff(
+    file: Option<&Path>,
+    project: Option<&Path>,
+    cache_dir: Option<&Path>,
+    workspace: Option<&Path>,
+    min_confidence: Option<MinConfidence>,
+    json: bool,
+) -> anyhow::Result<()> {
+    let diff_text = match file {
+        Some(path) => {
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?
+        }
+        None => {
+            let mut buf = String::new();
+            io::stdin()
+                .read_to_string(&mut buf)
+                .context("reading diff from stdin")?;
+            buf
+        }
+    };
+
+    let local = ops::diff_impact(&diff_text, project, cache_dir)?;
+    print_report(local, project, workspace, min_confidence, json)
 }
 
 fn run_index(path: &Path, cache_dir: Option<&Path>, force: bool, json: bool) -> anyhow::Result<()> {

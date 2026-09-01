@@ -60,10 +60,10 @@ fn initialize_result(protocol_version: &str) -> Value {
         "capabilities": {"tools": {}},
         "serverInfo": {"name": "impact", "version": env!("CARGO_PKG_VERSION")},
         "instructions": "Before modifying code, call impact_index once per project, then \
-            impact_file or impact_change to see what depends on what you're about to \
-            change — direct/indirect callers, API routes, event types, database tables, \
-            and affected tests. Re-run impact_index after the project changes; results \
-            are only as fresh as the last index.",
+            impact_file, impact_change, or impact_diff (given a unified diff) to see what \
+            depends on what you're about to change — direct/indirect callers, API routes, \
+            event types, database tables, and affected tests. Re-run impact_index after \
+            the project changes; results are only as fresh as the last index.",
     })
 }
 
@@ -156,6 +156,21 @@ fn tool_list() -> Value {
                 },
                 "required": ["description"]
             }
+        },
+        {
+            "name": "impact_diff",
+            "description": "Report the combined blast radius of a unified diff (e.g. `git diff` output) — every symbol the diff's touched lines fall inside, across every file it mentions. Useful for checking the blast radius of a change you're about to apply (or already have, uncommitted) in one call instead of one impact_file call per touched file. Requires the project to be indexed against the diff's new side — i.e. the working tree as it currently stands. Each caller in the result is tagged with a confidence tier (exact or heuristic); use min_confidence to hide heuristic matches. With workspace_path, also reports cross-project impact like impact_file does.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "diff": {"type": "string", "description": "Unified diff text, e.g. the output of `git diff`"},
+                    "project_path": {"type": "string", "description": "Project root the cache was built against (defaults to the current directory)"},
+                    "cache_dir": {"type": "string", "description": "Where the index cache lives (defaults to <project_path>/.impact)"},
+                    "workspace_path": {"type": "string", "description": "Path to a workspace.toml registering sibling projects, to also compute cross-project impact"},
+                    "min_confidence": {"type": "string", "enum": ["exact", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything)"}
+                },
+                "required": ["diff"]
+            }
         }
     ])
 }
@@ -165,6 +180,7 @@ fn dispatch_tool(name: &str, args: &Value) -> Value {
         "impact_index" => tool_index(args),
         "impact_file" => tool_file(args),
         "impact_change" => tool_change(args),
+        "impact_diff" => tool_diff(args),
         other => json!({"error": format!("Unknown tool: {other}")}),
     }
 }
@@ -256,6 +272,26 @@ fn tool_change(args: &Value) -> Value {
     };
 
     let result = ops::apply_change(&description, project_path.as_deref(), cache_dir.as_deref())
+        .map(|local| apply_min_confidence(local, min_confidence))
+        .and_then(|local| {
+            with_workspace(local, project_path.as_deref(), workspace_path.as_deref())
+        });
+    ok_or_error(result)
+}
+
+fn tool_diff(args: &Value) -> Value {
+    let Some(diff) = str_arg(args, "diff") else {
+        return json!({"error": "diff is required"});
+    };
+    let project_path = path_arg(args, "project_path");
+    let cache_dir = path_arg(args, "cache_dir");
+    let workspace_path = path_arg(args, "workspace_path");
+    let min_confidence = match min_confidence_arg(args) {
+        Ok(v) => v,
+        Err(e) => return json!({"error": e}),
+    };
+
+    let result = ops::diff_impact(&diff, project_path.as_deref(), cache_dir.as_deref())
         .map(|local| apply_min_confidence(local, min_confidence))
         .and_then(|local| {
             with_workspace(local, project_path.as_deref(), workspace_path.as_deref())

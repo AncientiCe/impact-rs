@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use serde::Serialize;
 
 use crate::change::ChangeSpec;
-use crate::graph::{Confidence, ContractKind, EdgeKind, NodeId, NodeKind, SymbolGraph};
+use crate::diff::DiffTouches;
+use crate::graph::{Confidence, ContractKind, EdgeKind, Node, NodeId, NodeKind, SymbolGraph};
 use crate::linker::Resolver;
 
 /// One reverse-dependent found while walking the blast radius, tagged with how
@@ -193,4 +194,38 @@ pub fn compute_symbol_impact(graph: &SymbolGraph, path: &str) -> Option<ImpactRe
 /// `ChangeSpec::target_path` for how each change kind maps to a resolvable path.
 pub fn compute_change_impact(graph: &SymbolGraph, spec: &ChangeSpec) -> Option<ImpactReport> {
     compute_symbol_impact(graph, &spec.target_path())
+}
+
+/// Diff-mode query: the blast radius of every symbol a diff's touched lines fall inside,
+/// across every file the diff mentions. There's no end-line span recorded for a symbol
+/// (only its declaration line — see `SymbolDecl`), so "which symbol contains line N" is
+/// resolved as the nearest declaration at or before N in the same file, not a precise AST
+/// containment check — the same kind of structural approximation `impact` makes
+/// everywhere else, not a claim of perfect precision. A touched range whose declaration
+/// line itself falls inside it (a new function, or one whose signature changed) is always
+/// caught directly; a range entirely inside an existing symbol's body is caught by the
+/// nearest-preceding-declaration fallback.
+pub fn compute_diff_impact(graph: &SymbolGraph, touches: &DiffTouches) -> ImpactReport {
+    let mut seeds: HashSet<NodeId> = HashSet::new();
+
+    for (file, ranges) in &touches.files {
+        let mut candidates: Vec<&Node> = graph
+            .nodes()
+            .filter(|n| &n.file == file && !matches!(n.kind, NodeKind::Module))
+            .collect();
+        candidates.sort_by_key(|n| n.line);
+
+        for range in ranges {
+            for candidate in &candidates {
+                if range.contains(&candidate.line) {
+                    seeds.insert(candidate.id.clone());
+                }
+            }
+            if let Some(preceding) = candidates.iter().rev().find(|n| n.line <= range.start) {
+                seeds.insert(preceding.id.clone());
+            }
+        }
+    }
+
+    compute_impact(graph, seeds)
 }

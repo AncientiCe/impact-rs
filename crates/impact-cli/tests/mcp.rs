@@ -78,7 +78,12 @@ fn initialize_and_tools_list_describe_the_server() {
         .collect();
     assert_eq!(
         tool_names,
-        vec!["impact_index", "impact_file", "impact_change"]
+        vec![
+            "impact_index",
+            "impact_file",
+            "impact_change",
+            "impact_diff"
+        ]
     );
 }
 
@@ -304,5 +309,57 @@ fn impact_file_min_confidence_filters_heuristic_entries() {
     assert_eq!(
         result["direct"],
         serde_json::json!([{"path": "caller::call_precise", "confidence": "Exact"}])
+    );
+}
+
+/// `impact_diff`, called over the real stdio protocol: a diff touching only
+/// `PaymentService::charge`'s body (not its declaration line) should resolve to the same
+/// DIRECT/INDIRECT chain the CLI's `diff.rs` tests already verified for this exact diff
+/// against `multi_file` — this only needs to prove the MCP tool reaches
+/// `ops::diff_impact`, not re-verify the diff-to-symbol mapping itself.
+#[test]
+fn impact_diff_reaches_the_same_diff_to_symbol_mapping_as_the_cli() {
+    fn fixture(name: &str) -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name)
+    }
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let project = fixture("multi_file");
+    let project_str = project.to_str().unwrap();
+    let cache_dir_str = cache_dir.path().to_str().unwrap();
+    let diff = "diff --git a/src/payment/service.rs b/src/payment/service.rs\n\
+--- a/src/payment/service.rs\n\
++++ b/src/payment/service.rs\n\
+@@ -5 +5 @@\n\
+-        true\n\
++        false\n";
+
+    let responses = mcp_round_trip(&[
+        tool_call(
+            1,
+            "impact_index",
+            serde_json::json!({"project_path": project_str, "cache_dir": cache_dir_str}),
+        ),
+        tool_call(
+            2,
+            "impact_diff",
+            serde_json::json!({
+                "diff": diff,
+                "project_path": project_str,
+                "cache_dir": cache_dir_str,
+            }),
+        ),
+    ]);
+
+    let result = tool_result_json(&responses[1]);
+    assert_eq!(
+        result["direct"],
+        serde_json::json!([{"path": "payment::controller::PaymentController::handle", "confidence": "Exact"}])
+    );
+    assert_eq!(
+        result["indirect"],
+        serde_json::json!([{"path": "order::OrderService::checkout", "confidence": "Exact"}])
     );
 }
