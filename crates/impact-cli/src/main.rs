@@ -1,3 +1,4 @@
+mod install;
 mod mcp;
 mod ops;
 
@@ -78,6 +79,66 @@ enum Command {
     /// Run the MCP stdio server, exposing `impact_index`/`impact_file`/`impact_change` as
     /// tools for an MCP-speaking agent. Blocks until stdin closes.
     Mcp,
+    /// Register the impact MCP server, and an agent rule telling the agent to verify
+    /// blast radius with it before/after editing code, with local AI coding tools.
+    Install {
+        /// Client(s) to configure: cursor, codex, claude, claude-desktop, or all.
+        #[arg(long, default_value = "all")]
+        client: String,
+        /// Config scope: user (global — works in every project) or project.
+        #[arg(long, default_value = "user")]
+        scope: String,
+        /// Project directory for project-scoped config (defaults to the current
+        /// directory). Codex and Claude Code only honor this for their rule file — their
+        /// MCP registration is always user-scoped, by design (see `impact doctor`).
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Override the resolved home directory. Mainly for portable or non-standard
+        /// user-profile setups; defaults to the OS user profile directory.
+        #[arg(long)]
+        home_dir: Option<PathBuf>,
+        /// Preview changes without writing any files.
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip installing the agent rule file/block.
+        #[arg(long)]
+        no_rule: bool,
+        /// Print machine-readable JSON instead of a human summary.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove the impact MCP server and rule file/block from local AI coding tools.
+    Uninstall {
+        #[arg(long, default_value = "all")]
+        client: String,
+        #[arg(long, default_value = "user")]
+        scope: String,
+        #[arg(long)]
+        path: Option<PathBuf>,
+        #[arg(long)]
+        home_dir: Option<PathBuf>,
+        /// Preview changes without writing any files.
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip removing the agent rule file/block.
+        #[arg(long)]
+        no_rule: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report whether each AI coding tool has impact registered and its rule installed.
+    Doctor {
+        #[arg(long, default_value = "all")]
+        client: String,
+        #[arg(long, default_value = "user")]
+        scope: String,
+        #[arg(long)]
+        path: Option<PathBuf>,
+        #[arg(long)]
+        home_dir: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -116,7 +177,134 @@ fn main() -> anyhow::Result<()> {
             json,
         ),
         Command::Mcp => mcp::run(),
+        Command::Install {
+            client,
+            scope,
+            path,
+            home_dir,
+            dry_run,
+            no_rule,
+            json,
+        } => run_install(&client, &scope, path, home_dir, dry_run, no_rule, json),
+        Command::Uninstall {
+            client,
+            scope,
+            path,
+            home_dir,
+            dry_run,
+            no_rule,
+            json,
+        } => run_uninstall(&client, &scope, path, home_dir, dry_run, no_rule, json),
+        Command::Doctor {
+            client,
+            scope,
+            path,
+            home_dir,
+            json,
+        } => run_doctor(&client, &scope, path, home_dir, json),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_install(
+    client: &str,
+    scope: &str,
+    path: Option<PathBuf>,
+    home_dir: Option<PathBuf>,
+    dry_run: bool,
+    no_rule: bool,
+    json: bool,
+) -> anyhow::Result<()> {
+    let mut options = install::build_options(client, scope, path, home_dir)?;
+    options.dry_run = dry_run;
+    options.install_rule = !no_rule;
+    let report = install::install_clients(&options)?;
+    print_install_report(
+        if dry_run { "would update" } else { "updated" },
+        &report,
+        json,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_uninstall(
+    client: &str,
+    scope: &str,
+    path: Option<PathBuf>,
+    home_dir: Option<PathBuf>,
+    dry_run: bool,
+    no_rule: bool,
+    json: bool,
+) -> anyhow::Result<()> {
+    let mut options = install::build_options(client, scope, path, home_dir)?;
+    options.dry_run = dry_run;
+    options.install_rule = !no_rule;
+    let report = install::uninstall_clients(&options)?;
+    print_install_report(
+        if dry_run { "would update" } else { "updated" },
+        &report,
+        json,
+    )
+}
+
+fn run_doctor(
+    client: &str,
+    scope: &str,
+    path: Option<PathBuf>,
+    home_dir: Option<PathBuf>,
+    json: bool,
+) -> anyhow::Result<()> {
+    let options = install::build_options(client, scope, path, home_dir)?;
+    let report = install::doctor(&options)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        for status in &report.clients {
+            println!("{}", status.client.name());
+            println!(
+                "  config:  {} ({})",
+                status.path.display(),
+                if status.configured {
+                    "configured"
+                } else {
+                    "missing"
+                }
+            );
+            if status.configured && !status.points_to_expected_binary {
+                println!("           points at a different binary than this one");
+            }
+            let rule_state = if !status.rule_installed {
+                "missing"
+            } else if status.rule_current {
+                "up to date"
+            } else {
+                "present, out of date"
+            };
+            println!("  rule:    {} ({})", status.rule_path.display(), rule_state);
+        }
+    }
+    Ok(())
+}
+
+fn print_install_report(
+    action: &str,
+    report: &install::InstallReport,
+    json: bool,
+) -> anyhow::Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    for path in &report.changed {
+        println!("{action} {}", path.display());
+    }
+    for path in &report.rule_changed {
+        println!("{action} {}", path.display());
+    }
+    if report.changed.is_empty() && report.rule_changed.is_empty() {
+        println!("nothing to do — already up to date");
+    }
+    Ok(())
 }
 
 fn run_index(path: &Path, cache_dir: Option<&Path>, force: bool, json: bool) -> anyhow::Result<()> {

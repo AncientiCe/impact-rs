@@ -38,6 +38,8 @@ tree-sitter-kotlin-ng = "1"
 tree-sitter-swift = "0.7"
 clap = { version = "4", features = ["derive"] }
 toml = "0.8"
+toml_edit = "0.22"
+directories = "5"
 
 [profile.release]
 opt-level = 3
