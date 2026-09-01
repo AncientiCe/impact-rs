@@ -45,3 +45,7 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 - 1 new fixture (`mixed_lang`, one Rust file plus a 3-file TypeScript call chain including a class method) and 2 new behavior tests: cross-file TypeScript call resolution through the same DIRECT/INDIRECT engine Rust uses, and confirmation that the Rust file in the same project is indexed by `RustAdapter` unaffected by `TsAdapter` also being registered.
 
 All seven phases of the original plan are now complete: scaffolding, the call-graph engine, contract detectors (API/EVENTS/DATABASE/TESTS), the `--change` grammar, the MCP server, cross-project workspace matching, and a second language adapter proving the core is actually language-agnostic. 21 behavior tests across 11 fixtures, all five quality gates green throughout.
+
+- `README.md`: what the tool does, how it works (structural resolution, over-report philosophy), CLI/MCP/`--change`-grammar reference, `impact.toml`/`workspace.toml` config shapes, architecture table, development gates.
+- `LICENSE` (MIT) — `Cargo.toml` already declared `license = "MIT"` with no accompanying file.
+- Per-crate `description`/`keywords`/`categories`/`homepage` metadata on all four crates.
