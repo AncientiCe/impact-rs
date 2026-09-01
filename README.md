@@ -41,6 +41,8 @@ API/EVENTS/DATABASE contract detection (axum/sqlx/event conventions) is currentl
 
 Structural resolution, not a compiler: `impact` parses source with [tree-sitter](https://tree-sitter.github.io/tree-sitter/), extracts symbols and call sites, and resolves references by name (exact qualified path first, falling back to a bare short name when a call site doesn't fully qualify its target). It doesn't type-check, so it can't always tell which of several same-named candidates a call resolves to — when that happens, it reports *all* of them rather than guessing wrong and staying silent. A blast-radius tool should over-report, not under-report: a false positive is visible and easy to dismiss, a false negative is invisible and costs you later.
 
+Every DIRECT/INDIRECT entry carries the confidence behind it: `Exact` when the whole chain back to what you queried resolved unambiguously, `Heuristic` when any hop along the way only matched a bare short name shared by more than one candidate — a multi-hop chain is only as trustworthy as its weakest hop. Tree-text output tags anything below `Exact` inline (`caller::maybe_this [heuristic]`); `--min-confidence exact` (CLI) or `min_confidence: "exact"` (MCP) drops heuristic entries entirely when you only want what's certain.
+
 ## Installation
 
 **macOS / Linux (Homebrew):**
@@ -85,8 +87,8 @@ cargo run -p impact-cli -- mcp
 | Command | Description |
 |---|---|
 | `impact index <path> [--force] [--cache-dir <dir>]` | Index (or re-index) a project. `--force` wipes the cache and re-parses everything, ignoring content-hash skips. |
-| `impact query <file> [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--json]` | Blast radius of a file. |
-| `impact change "<description>" [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--json]` | Blast radius of one symbol-level change. |
+| `impact query <file> [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|heuristic] [--json]` | Blast radius of a file. |
+| `impact change "<description>" [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|heuristic] [--json]` | Blast radius of one symbol-level change. |
 | `impact mcp` | Start the MCP stdio server. Blocks until stdin closes. |
 
 ## `--change` grammar
@@ -107,8 +109,8 @@ Unparseable input is a hard error with a usage hint — never a best-effort gues
 | Tool | Description |
 |---|---|
 | `impact_index` | Index (or re-index) a project. |
-| `impact_file` | Blast radius of a file, optionally extended with `workspace_path` for cross-project matches. |
-| `impact_change` | Blast radius of a `--change`-style description, same `workspace_path` support. |
+| `impact_file` | Blast radius of a file, optionally extended with `workspace_path` for cross-project matches; `min_confidence: "exact"\|"heuristic"` filters DIRECT/INDIRECT entries. |
+| `impact_change` | Blast radius of a `--change`-style description, same `workspace_path`/`min_confidence` support. |
 
 ```bash
 claude mcp add impact -- impact mcp

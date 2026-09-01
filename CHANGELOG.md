@@ -4,6 +4,17 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- `ImpactReport.direct`/`.indirect` entries now carry a `confidence` tier (`Exact`/`Probable`/`Heuristic`) alongside `path`, surfacing data the linker already computed (`Confidence::Exact`/`Heuristic` per edge, see `impact-core::linker::Resolver`) but previously discarded before it reached the CLI/MCP output. A multi-hop chain's confidence is its weakest link, not just the last hop's — one heuristic hop (a bare short-name call site matching more than one candidate) makes the whole chain only as trustworthy as that hop.
+- `impact query`/`impact change --min-confidence exact|heuristic` and the equivalent `min_confidence` argument on the `impact_file`/`impact_change` MCP tools: filters DIRECT/INDIRECT entries below the given confidence, so an agent (or human) can ask for only unambiguous dependents instead of reading every heuristic match.
+- Tree-text output tags non-`Exact` entries inline (`caller::maybe_this [heuristic]`) rather than leaving confidence JSON-only.
+- New `confidence` fixture and 2 new behavior tests (`crates/impact-cli/tests/confidence.rs`) hand-verifying a single query surfacing both an `Exact` and a `Heuristic` DIRECT entry, and `--min-confidence exact` filtering the heuristic one out. Plus 1 new MCP-level test confirming `impact_file`'s `min_confidence` argument reaches the same filter.
+
+### Changed
+
+- **Breaking**: `ImpactReport.direct`/`.indirect` changed from `Vec<String>` to `Vec<Dependent>` (`{path, confidence}`) in both the Rust API and the JSON output — every existing CLI/MCP consumer parsing these fields as bare strings needs to read `.path` instead.
+
 ## [0.2.0] - 2026-09-01
 
 ### Added

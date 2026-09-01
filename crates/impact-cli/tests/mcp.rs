@@ -139,7 +139,7 @@ fn index_file_and_change_tools_work_over_the_real_protocol() {
     let file_result = tool_result_json(&responses[1]);
     assert_eq!(
         file_result["direct"],
-        serde_json::json!(["handlers::PaymentHandler::create_payment_route"])
+        serde_json::json!([{"path": "handlers::PaymentHandler::create_payment_route", "confidence": "Exact"}])
     );
     assert_eq!(file_result["api"], serde_json::json!(["POST /payments"]));
     assert_eq!(file_result["events"], serde_json::json!(["PaymentCreated"]));
@@ -150,8 +150,8 @@ fn index_file_and_change_tools_work_over_the_real_protocol() {
     assert_eq!(
         change_result["direct"],
         serde_json::json!([
-            "handlers::PaymentHandler::create_payment_route",
-            "repo::save_payment_persists",
+            {"path": "handlers::PaymentHandler::create_payment_route", "confidence": "Exact"},
+            {"path": "repo::save_payment_persists", "confidence": "Exact"},
         ])
     );
     assert_eq!(change_result["tests"], 2);
@@ -262,5 +262,47 @@ fn impact_file_workspace_path_reaches_cross_project_matching() {
             {"project_id": "web", "contract_kind": "Event", "contract_id": "OrderPlaced", "confidence": "weak"},
             {"project_id": "web", "contract_kind": "Event", "contract_id": "PaymentCreated", "confidence": "declared"},
         ])
+    );
+}
+
+/// `impact_file`'s `min_confidence` argument reaches the same filter the CLI's
+/// `confidence.rs` tests already verified (`--min-confidence exact` hides heuristic
+/// entries) — this only needs to prove the MCP-specific plumbing isn't dropped or
+/// mis-wired, not re-verify the filtering logic itself.
+#[test]
+fn impact_file_min_confidence_filters_heuristic_entries() {
+    fn fixture(name: &str) -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name)
+    }
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let project = fixture("confidence");
+    let project_str = project.to_str().unwrap();
+    let cache_dir_str = cache_dir.path().to_str().unwrap();
+
+    let responses = mcp_round_trip(&[
+        tool_call(
+            1,
+            "impact_index",
+            serde_json::json!({"project_path": project_str, "cache_dir": cache_dir_str}),
+        ),
+        tool_call(
+            2,
+            "impact_file",
+            serde_json::json!({
+                "path": "src/target.rs",
+                "project_path": project_str,
+                "cache_dir": cache_dir_str,
+                "min_confidence": "exact",
+            }),
+        ),
+    ]);
+
+    let result = tool_result_json(&responses[1]);
+    assert_eq!(
+        result["direct"],
+        serde_json::json!([{"path": "caller::call_precise", "confidence": "Exact"}])
     );
 }

@@ -22,6 +22,18 @@ fn index(cache_dir: &Path) {
     );
 }
 
+/// Builds the JSON shape a report's `direct`/`indirect` entries now carry: `{path,
+/// confidence}` pairs. Every path here resolves unambiguously in its fixture, so `Exact`
+/// is the right expected confidence throughout this file.
+fn exact(paths: &[&str]) -> Value {
+    Value::Array(
+        paths
+            .iter()
+            .map(|p| serde_json::json!({"path": p, "confidence": "Exact"}))
+            .collect(),
+    )
+}
+
 fn query(cache_dir: &Path, file: &str) -> Value {
     let output = Command::cargo_bin("impact")
         .unwrap()
@@ -54,11 +66,11 @@ fn reports_direct_and_indirect_callers_across_files() {
 
     assert_eq!(
         report["direct"],
-        serde_json::json!(["payment::controller::PaymentController::handle"])
+        exact(&["payment::controller::PaymentController::handle"])
     );
     assert_eq!(
         report["indirect"],
-        serde_json::json!(["order::OrderService::checkout"])
+        exact(&["order::OrderService::checkout"])
     );
 }
 

@@ -4,8 +4,26 @@ mod ops;
 
 use std::path::{Path, PathBuf};
 
-use clap::{Parser, Subcommand};
-use impact_core::{CrossProjectMatch, ImpactReport};
+use clap::{Parser, Subcommand, ValueEnum};
+use impact_core::{Confidence, CrossProjectMatch, ImpactReport};
+
+/// CLI-facing mirror of `impact_core::Confidence`'s two tiers a user would realistically
+/// filter on. `--min-confidence exact` keeps only unambiguous dependents; the default
+/// (no flag) shows everything, `Heuristic` included.
+#[derive(Clone, Copy, ValueEnum)]
+enum MinConfidence {
+    Exact,
+    Heuristic,
+}
+
+impl From<MinConfidence> for Confidence {
+    fn from(value: MinConfidence) -> Self {
+        match value {
+            MinConfidence::Exact => Confidence::Exact,
+            MinConfidence::Heuristic => Confidence::Heuristic,
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -50,6 +68,10 @@ enum Command {
         /// which of them this file's API routes/events/tables touch.
         #[arg(long)]
         workspace: Option<PathBuf>,
+        /// Only show DIRECT/INDIRECT dependents resolved with at least this confidence —
+        /// `exact` hides anything the linker could only match by ambiguous short name.
+        #[arg(long)]
+        min_confidence: Option<MinConfidence>,
         /// Print machine-readable JSON instead of the tree-text report.
         #[arg(long)]
         json: bool,
@@ -72,6 +94,10 @@ enum Command {
         /// which of them this change's API routes/events/tables touch.
         #[arg(long)]
         workspace: Option<PathBuf>,
+        /// Only show DIRECT/INDIRECT dependents resolved with at least this confidence —
+        /// `exact` hides anything the linker could only match by ambiguous short name.
+        #[arg(long)]
+        min_confidence: Option<MinConfidence>,
         /// Print machine-readable JSON instead of the tree-text report.
         #[arg(long)]
         json: bool,
@@ -155,12 +181,14 @@ fn main() -> anyhow::Result<()> {
             project,
             cache_dir,
             workspace,
+            min_confidence,
             json,
         } => run_query(
             &path,
             project.as_deref(),
             cache_dir.as_deref(),
             workspace.as_deref(),
+            min_confidence,
             json,
         ),
         Command::Change {
@@ -168,12 +196,14 @@ fn main() -> anyhow::Result<()> {
             project,
             cache_dir,
             workspace,
+            min_confidence,
             json,
         } => run_change(
             &description,
             project.as_deref(),
             cache_dir.as_deref(),
             workspace.as_deref(),
+            min_confidence,
             json,
         ),
         Command::Mcp => mcp::run(),
@@ -320,34 +350,43 @@ fn run_index(path: &Path, cache_dir: Option<&Path>, force: bool, json: bool) -> 
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_query(
     path: &Path,
     project: Option<&Path>,
     cache_dir: Option<&Path>,
     workspace: Option<&Path>,
+    min_confidence: Option<MinConfidence>,
     json: bool,
 ) -> anyhow::Result<()> {
     let local = ops::query_file(path, project, cache_dir)?;
-    print_report(local, project, workspace, json)
+    print_report(local, project, workspace, min_confidence, json)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_change(
     description: &str,
     project: Option<&Path>,
     cache_dir: Option<&Path>,
     workspace: Option<&Path>,
+    min_confidence: Option<MinConfidence>,
     json: bool,
 ) -> anyhow::Result<()> {
     let local = ops::apply_change(description, project, cache_dir)?;
-    print_report(local, project, workspace, json)
+    print_report(local, project, workspace, min_confidence, json)
 }
 
 fn print_report(
     local: ImpactReport,
     project: Option<&Path>,
     workspace: Option<&Path>,
+    min_confidence: Option<MinConfidence>,
     json: bool,
 ) -> anyhow::Result<()> {
+    let local = match min_confidence {
+        Some(min) => impact_core::filter_min_confidence(local, min.into()),
+        None => local,
+    };
     match workspace {
         None => {
             if json {
@@ -369,15 +408,21 @@ fn print_report(
     Ok(())
 }
 
+fn print_dependents(dependents: &[impact_core::Dependent]) {
+    for d in dependents {
+        match d.confidence {
+            Confidence::Exact => println!("  {}", d.path),
+            Confidence::Probable => println!("  {} [probable]", d.path),
+            Confidence::Heuristic => println!("  {} [heuristic]", d.path),
+        }
+    }
+}
+
 fn print_tree_text(report: &ImpactReport) {
     println!("DIRECT");
-    for name in &report.direct {
-        println!("  {name}");
-    }
+    print_dependents(&report.direct);
     println!("INDIRECT");
-    for name in &report.indirect {
-        println!("  {name}");
-    }
+    print_dependents(&report.indirect);
     println!("API");
     for name in &report.api {
         println!("  {name}");

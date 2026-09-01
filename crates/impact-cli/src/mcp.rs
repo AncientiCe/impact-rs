@@ -129,28 +129,30 @@ fn tool_list() -> Value {
         },
         {
             "name": "impact_file",
-            "description": "Report the blast radius of changing a file: direct callers, indirect (transitive) callers, API routes, event types, and database tables the affected code touches, plus a count of affected tests. With workspace_path, also reports which sibling projects registered there are touched by the same API routes/events/tables. Requires impact_index to have run first (and, for cross-project results, the sibling projects to have been indexed too).",
+            "description": "Report the blast radius of changing a file: direct callers, indirect (transitive) callers, API routes, event types, and database tables the affected code touches, plus a count of affected tests. Each caller is tagged with a confidence tier (exact or heuristic) reflecting how unambiguously the linker resolved it — use min_confidence to hide heuristic (short-name-ambiguous) matches. With workspace_path, also reports which sibling projects registered there are touched by the same API routes/events/tables. Requires impact_index to have run first (and, for cross-project results, the sibling projects to have been indexed too).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "File to compute the blast radius for, relative to project_path or absolute"},
                     "project_path": {"type": "string", "description": "Project root the cache was built against (defaults to the current directory)"},
                     "cache_dir": {"type": "string", "description": "Where the index cache lives (defaults to <project_path>/.impact)"},
-                    "workspace_path": {"type": "string", "description": "Path to a workspace.toml registering sibling projects, to also compute cross-project impact"}
+                    "workspace_path": {"type": "string", "description": "Path to a workspace.toml registering sibling projects, to also compute cross-project impact"},
+                    "min_confidence": {"type": "string", "enum": ["exact", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything)"}
                 },
                 "required": ["path"]
             }
         },
         {
             "name": "impact_change",
-            "description": "Report the deterministic blast radius of a specific change, described in impact's small fixed grammar: \"rename <path>\", \"rename <path> to <path>\", \"remove <path>\", \"remove variant <Enum>::<Variant>\", \"remove field <Type>.<field>\", or \"change signature of <path>\". Not natural language — an unrecognized description is a hard error, never a best-effort guess. With workspace_path, also reports cross-project impact like impact_file does. Requires impact_index to have run first.",
+            "description": "Report the deterministic blast radius of a specific change, described in impact's small fixed grammar: \"rename <path>\", \"rename <path> to <path>\", \"remove <path>\", \"remove variant <Enum>::<Variant>\", \"remove field <Type>.<field>\", or \"change signature of <path>\". Not natural language — an unrecognized description is a hard error, never a best-effort guess. Each caller in the result is tagged with a confidence tier (exact or heuristic); use min_confidence to hide heuristic matches. With workspace_path, also reports cross-project impact like impact_file does. Requires impact_index to have run first.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "description": {"type": "string", "description": "The change, in impact's deterministic grammar"},
                     "project_path": {"type": "string", "description": "Project root the cache was built against (defaults to the current directory)"},
                     "cache_dir": {"type": "string", "description": "Where the index cache lives (defaults to <project_path>/.impact)"},
-                    "workspace_path": {"type": "string", "description": "Path to a workspace.toml registering sibling projects, to also compute cross-project impact"}
+                    "workspace_path": {"type": "string", "description": "Path to a workspace.toml registering sibling projects, to also compute cross-project impact"},
+                    "min_confidence": {"type": "string", "enum": ["exact", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything)"}
                 },
                 "required": ["description"]
             }
@@ -173,6 +175,29 @@ fn str_arg(args: &Value, key: &str) -> Option<String> {
 
 fn path_arg(args: &Value, key: &str) -> Option<PathBuf> {
     str_arg(args, key).map(PathBuf::from)
+}
+
+/// Parses the optional `min_confidence` tool argument, rejecting anything other than the
+/// two documented values with a clear error rather than silently ignoring a typo.
+fn min_confidence_arg(args: &Value) -> Result<Option<impact_core::Confidence>, String> {
+    match args.get("min_confidence").and_then(|v| v.as_str()) {
+        None => Ok(None),
+        Some("exact") => Ok(Some(impact_core::Confidence::Exact)),
+        Some("heuristic") => Ok(Some(impact_core::Confidence::Heuristic)),
+        Some(other) => Err(format!(
+            "min_confidence must be \"exact\" or \"heuristic\", got {other:?}"
+        )),
+    }
+}
+
+fn apply_min_confidence(
+    report: impact_core::ImpactReport,
+    min: Option<impact_core::Confidence>,
+) -> impact_core::ImpactReport {
+    match min {
+        Some(min) => impact_core::filter_min_confidence(report, min),
+        None => report,
+    }
 }
 
 fn ok_or_error<T: serde::Serialize>(result: anyhow::Result<T>) -> Value {
@@ -205,9 +230,14 @@ fn tool_file(args: &Value) -> Value {
     let project_path = path_arg(args, "project_path");
     let cache_dir = path_arg(args, "cache_dir");
     let workspace_path = path_arg(args, "workspace_path");
+    let min_confidence = match min_confidence_arg(args) {
+        Ok(v) => v,
+        Err(e) => return json!({"error": e}),
+    };
 
-    let result =
-        ops::query_file(&path, project_path.as_deref(), cache_dir.as_deref()).and_then(|local| {
+    let result = ops::query_file(&path, project_path.as_deref(), cache_dir.as_deref())
+        .map(|local| apply_min_confidence(local, min_confidence))
+        .and_then(|local| {
             with_workspace(local, project_path.as_deref(), workspace_path.as_deref())
         });
     ok_or_error(result)
@@ -220,8 +250,13 @@ fn tool_change(args: &Value) -> Value {
     let project_path = path_arg(args, "project_path");
     let cache_dir = path_arg(args, "cache_dir");
     let workspace_path = path_arg(args, "workspace_path");
+    let min_confidence = match min_confidence_arg(args) {
+        Ok(v) => v,
+        Err(e) => return json!({"error": e}),
+    };
 
     let result = ops::apply_change(&description, project_path.as_deref(), cache_dir.as_deref())
+        .map(|local| apply_min_confidence(local, min_confidence))
         .and_then(|local| {
             with_workspace(local, project_path.as_deref(), workspace_path.as_deref())
         });

@@ -59,10 +59,16 @@ fn go_adapter_resolves_calls_across_files_and_detects_tests() {
     assert_eq!(stats["symbols_indexed"], 5);
 
     let report = query(cache_dir.path(), "util.go");
-    assert_eq!(report["direct"], serde_json::json!(["service::Process"]));
+    assert_eq!(
+        report["direct"],
+        serde_json::json!([{"path": "service::Process", "confidence": "Exact"}])
+    );
     assert_eq!(
         report["indirect"],
-        serde_json::json!(["caller::Consumer::Run", "service_test::TestProcess"])
+        serde_json::json!([
+            {"path": "caller::Consumer::Run", "confidence": "Exact"},
+            {"path": "service_test::TestProcess", "confidence": "Exact"},
+        ])
     );
     assert_eq!(report["tests"], 1);
 }

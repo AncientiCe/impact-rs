@@ -1,10 +1,22 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde::Serialize;
 
 use crate::change::ChangeSpec;
-use crate::graph::{ContractKind, EdgeKind, NodeId, NodeKind, SymbolGraph};
+use crate::graph::{Confidence, ContractKind, EdgeKind, NodeId, NodeKind, SymbolGraph};
 use crate::linker::Resolver;
+
+/// One reverse-dependent found while walking the blast radius, tagged with how
+/// confidently the linker resolved the call/reference chain connecting it to what was
+/// queried. `Exact` means every hop along the way resolved unambiguously; `Heuristic`
+/// means at least one hop matched a bare short name against more than one candidate. A
+/// multi-hop chain's confidence is its weakest link, not its first or last hop — one
+/// heuristic hop makes the whole chain only as trustworthy as that hop.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Dependent {
+    pub path: String,
+    pub confidence: Confidence,
+}
 
 /// The blast radius of a change: who's affected directly, who's affected transitively
 /// through them, which API routes / event types / database tables the affected symbols
@@ -12,12 +24,20 @@ use crate::linker::Resolver;
 /// produces the same report — determinism is the whole point of this tool.
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 pub struct ImpactReport {
-    pub direct: Vec<String>,
-    pub indirect: Vec<String>,
+    pub direct: Vec<Dependent>,
+    pub indirect: Vec<Dependent>,
     pub api: Vec<String>,
     pub events: Vec<String>,
     pub database: Vec<String>,
     pub tests: usize,
+}
+
+/// Drops `direct`/`indirect` entries below `min` confidence, leaving `api`/`events`/
+/// `database`/`tests` untouched — those don't carry a confidence tier of their own.
+pub fn filter_min_confidence(mut report: ImpactReport, min: Confidence) -> ImpactReport {
+    report.direct.retain(|d| d.confidence.at_least(min));
+    report.indirect.retain(|d| d.confidence.at_least(min));
+    report
 }
 
 /// Computes the full blast radius of `seeds`: DIRECT (1-hop reverse dependents) and
@@ -33,7 +53,7 @@ pub struct ImpactReport {
 /// nothing, even though every producer and consumer of that event is exactly its blast
 /// radius.
 fn compute_impact(graph: &SymbolGraph, seeds: HashSet<NodeId>) -> ImpactReport {
-    let mut callers: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+    let mut callers: HashMap<NodeId, Vec<(NodeId, Confidence)>> = HashMap::new();
     for edge in graph.edges() {
         if matches!(
             edge.kind,
@@ -47,13 +67,16 @@ fn compute_impact(graph: &SymbolGraph, seeds: HashSet<NodeId>) -> ImpactReport {
             callers
                 .entry(edge.to.clone())
                 .or_default()
-                .push(edge.from.clone());
+                .push((edge.from.clone(), edge.confidence));
         }
     }
 
-    let mut direct: BTreeSet<String> = BTreeSet::new();
-    let mut indirect: BTreeSet<String> = BTreeSet::new();
+    let mut direct: BTreeMap<String, Confidence> = BTreeMap::new();
+    let mut indirect: BTreeMap<String, Confidence> = BTreeMap::new();
     let mut visited: HashSet<NodeId> = seeds.clone();
+    // A seed is definitionally certain — the first hop off of it inherits the edge's own
+    // confidence unmodified, which `weaker` below achieves by starting at `Exact`.
+    let mut node_confidence: HashMap<NodeId, Confidence> = HashMap::new();
 
     let mut frontier: Vec<NodeId> = seeds.iter().cloned().collect();
     let mut hop = 0;
@@ -64,19 +87,25 @@ fn compute_impact(graph: &SymbolGraph, seeds: HashSet<NodeId>) -> ImpactReport {
             let Some(node_callers) = callers.get(node_id) else {
                 continue;
             };
-            for caller in node_callers {
+            let incoming = node_confidence
+                .get(node_id)
+                .copied()
+                .unwrap_or(Confidence::Exact);
+            for (caller, edge_confidence) in node_callers {
                 if !visited.insert(caller.clone()) {
                     continue;
                 }
+                let confidence = incoming.weaker(*edge_confidence);
+                node_confidence.insert(caller.clone(), confidence);
                 let name = graph
                     .node(caller)
                     .map(|n| n.qualified_path.clone())
                     .unwrap_or_else(|| caller.to_string());
-                if hop == 1 {
-                    direct.insert(name);
-                } else {
-                    indirect.insert(name);
-                }
+                let bucket = if hop == 1 { &mut direct } else { &mut indirect };
+                bucket
+                    .entry(name)
+                    .and_modify(|c| *c = (*c).weaker(confidence))
+                    .or_insert(confidence);
                 next.push(caller.clone());
             }
         }
@@ -124,8 +153,14 @@ fn compute_impact(graph: &SymbolGraph, seeds: HashSet<NodeId>) -> ImpactReport {
         .count();
 
     ImpactReport {
-        direct: direct.into_iter().collect(),
-        indirect: indirect.into_iter().collect(),
+        direct: direct
+            .into_iter()
+            .map(|(path, confidence)| Dependent { path, confidence })
+            .collect(),
+        indirect: indirect
+            .into_iter()
+            .map(|(path, confidence)| Dependent { path, confidence })
+            .collect(),
         api: api.into_iter().collect(),
         events: events.into_iter().collect(),
         database: database.into_iter().collect(),

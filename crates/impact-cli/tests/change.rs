@@ -27,6 +27,18 @@ fn index(fixture: &Path, cache_dir: &Path) {
     );
 }
 
+/// Builds the JSON shape a report's `direct`/`indirect` entries now carry: `{path,
+/// confidence}` pairs. Every path here resolves unambiguously in its fixture, so `Exact`
+/// is the right expected confidence throughout this file.
+fn exact(paths: &[&str]) -> Value {
+    Value::Array(
+        paths
+            .iter()
+            .map(|p| serde_json::json!({"path": p, "confidence": "Exact"}))
+            .collect(),
+    )
+}
+
 fn change(fixture: &Path, cache_dir: &Path, description: &str) -> Value {
     let output = Command::cargo_bin("impact")
         .unwrap()
@@ -61,11 +73,8 @@ fn remove_variant_finds_match_arms_across_files() {
         "remove variant status::PaymentStatus::Failed",
     );
 
-    assert_eq!(report["direct"], serde_json::json!(["display::describe"]));
-    assert_eq!(
-        report["indirect"],
-        serde_json::json!(["summary::summarize"])
-    );
+    assert_eq!(report["direct"], exact(&["display::describe"]));
+    assert_eq!(report["indirect"], exact(&["summary::summarize"]));
 }
 
 /// `rename`, `remove`, and `change signature of` all reduce to the same "blast radius of
@@ -81,11 +90,11 @@ fn rename_remove_and_signature_change_agree_on_the_same_symbol() {
     let cache_dir = tempfile::tempdir().unwrap();
     index(&contracts_fixture(), cache_dir.path());
 
-    let expected_direct = serde_json::json!([
+    let expected_direct = exact(&[
         "handlers::PaymentHandler::create_payment_route",
         "repo::save_payment_persists",
     ]);
-    let expected_indirect = serde_json::json!(["e2e_tests::creates_payment_route_end_to_end"]);
+    let expected_indirect = exact(&["e2e_tests::creates_payment_route_end_to_end"]);
 
     for description in [
         "rename repo::save_payment",

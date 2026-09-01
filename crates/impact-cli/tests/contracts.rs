@@ -22,6 +22,18 @@ fn index(cache_dir: &Path) {
     );
 }
 
+/// Builds the JSON shape a report's `direct`/`indirect` entries now carry: `{path,
+/// confidence}` pairs. Every path here resolves unambiguously in its fixture, so `Exact`
+/// is the right expected confidence throughout this file.
+fn exact(paths: &[&str]) -> Value {
+    Value::Array(
+        paths
+            .iter()
+            .map(|p| serde_json::json!({"path": p, "confidence": "Exact"}))
+            .collect(),
+    )
+}
+
 fn query(cache_dir: &Path, file: &str) -> Value {
     let output = Command::cargo_bin("impact")
         .unwrap()
@@ -64,11 +76,11 @@ fn reports_api_events_database_and_tests_for_repo_file() {
 
     assert_eq!(
         report["direct"],
-        serde_json::json!(["handlers::PaymentHandler::create_payment_route"])
+        exact(&["handlers::PaymentHandler::create_payment_route"])
     );
     assert_eq!(
         report["indirect"],
-        serde_json::json!(["e2e_tests::creates_payment_route_end_to_end"])
+        exact(&["e2e_tests::creates_payment_route_end_to_end"])
     );
     assert_eq!(report["api"], serde_json::json!(["POST /payments"]));
     assert_eq!(report["events"], serde_json::json!(["PaymentCreated"]));
@@ -99,14 +111,14 @@ fn event_declaration_file_reports_producers_and_consumers() {
 
     assert_eq!(
         report["direct"],
-        serde_json::json!([
+        exact(&[
             "handlers::PaymentHandler::create_payment_route",
             "handlers::PaymentHandler::on_payment_created",
         ])
     );
     assert_eq!(
         report["indirect"],
-        serde_json::json!(["e2e_tests::creates_payment_route_end_to_end"])
+        exact(&["e2e_tests::creates_payment_route_end_to_end"])
     );
     assert_eq!(report["api"], serde_json::json!(["POST /payments"]));
     assert_eq!(report["events"], serde_json::json!(["PaymentCreated"]));

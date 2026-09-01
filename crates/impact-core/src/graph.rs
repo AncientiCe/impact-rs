@@ -71,6 +71,35 @@ pub enum Confidence {
     Heuristic,
 }
 
+impl Confidence {
+    /// Ordinal strength for comparing two tiers — `Exact` is strongest, `Heuristic`
+    /// weakest.
+    fn ordinal(self) -> u8 {
+        match self {
+            Confidence::Heuristic => 0,
+            Confidence::Probable => 1,
+            Confidence::Exact => 2,
+        }
+    }
+
+    /// The weaker (less certain) of two confidence tiers — used to fold a multi-hop
+    /// chain's confidence down to its weakest link, since one heuristic hop makes the
+    /// whole chain only as trustworthy as that hop.
+    pub fn weaker(self, other: Confidence) -> Confidence {
+        if self.ordinal() <= other.ordinal() {
+            self
+        } else {
+            other
+        }
+    }
+
+    /// Whether this tier meets or exceeds `min` in certainty — the basis for a
+    /// `--min-confidence` style filter.
+    pub fn at_least(self, min: Confidence) -> bool {
+        self.ordinal() >= min.ordinal()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Edge {
     pub from: NodeId,
