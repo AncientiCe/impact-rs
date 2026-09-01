@@ -15,6 +15,10 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 - **Breaking**: `ImpactReport.direct`/`.indirect` changed from `Vec<String>` to `Vec<Dependent>` (`{path, confidence}`) in both the Rust API and the JSON output — every existing CLI/MCP consumer parsing these fields as bare strings needs to read `.path` instead.
 
+### Added
+
+- `impact-lang-go` now detects one API contract shape: `net/http`'s Go 1.22+ method-prefixed routing (`mux.HandleFunc("POST /payments", handler)`), gated on `impact.toml`'s `api_frameworks` containing `"net/http"` (on by default, alongside `axum`, so both Rust and Go projects get useful API detection with no config file). The pattern's verb-prefixed form already matches the exact `"{VERB} {path}"` identity string `impact-lang-rust`'s axum detector produces, so a Go and a Rust service registering the same route are identity-matchable across a `workspace.toml` with no extra normalization. `GoAdapter` now takes a `DetectorConfig` (`GoAdapter::new(config)`), mirroring `RustAdapter`; the config-less form remains available via `GoAdapter::default()`. Method-less patterns (`mux.HandleFunc("/path", handler)`) are deliberately not recognized — there's no verb to report. New `go_contracts` fixture and 1 new behavior test.
+
 ## [0.2.0] - 2026-09-01
 
 ### Added

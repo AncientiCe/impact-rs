@@ -1,6 +1,6 @@
 [package]
 name = "impact-lang-go"
-description = "Go language adapter for impact — tree-sitter-based symbol and call extraction"
+description = "Go language adapter for impact — tree-sitter-based symbol, call, and route extraction"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

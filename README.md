@@ -35,7 +35,7 @@ TESTS
 
 Supports Rust, TypeScript/TSX (React), JavaScript/JSX (React Native), Python, Go, Kotlin (Android), and Swift today. The core (`impact-core`) is language-agnostic by design — each language is a pluggable adapter (tree-sitter-based symbol/call extraction), and adding another language means writing one more adapter crate, not touching the engine, linker, or MCP surface. Every adapter after the first (Rust) proved that boundary holds by adding zero lines to `impact-core`.
 
-API/EVENTS/DATABASE contract detection (axum/sqlx/event conventions) is currently Rust-only; the other six languages get DIRECT/INDIRECT/TESTS. Test detection follows whatever convention a language actually has one unambiguous answer for — pytest's `test`-prefix, `go test`'s `TestXxx` in `_test.go`, JUnit's `@Test`, XCTest's `test`-prefixed `XCTestCase` methods — and is intentionally left off for TypeScript/JavaScript, where Jest/Vitest/Mocha disagree.
+Full API/EVENTS/DATABASE contract detection (axum/sqlx/event conventions) is currently Rust-only. Go additionally detects one API shape — `net/http`'s Go 1.22+ method-prefixed routing (`mux.HandleFunc("POST /payments", handler)`) — in the same `"{VERB} {path}"` identity format the Rust detector uses, so a Go and a Rust service registering the same route are identity-matchable across a `workspace.toml`; EVENTS/DATABASE detection isn't wired up for Go yet. The remaining five languages get DIRECT/INDIRECT/TESTS only. Test detection follows whatever convention a language actually has one unambiguous answer for — pytest's `test`-prefix, `go test`'s `TestXxx` in `_test.go`, JUnit's `@Test`, XCTest's `test`-prefixed `XCTestCase` methods — and is intentionally left off for TypeScript/JavaScript, where Jest/Vitest/Mocha disagree.
 
 ## How it works
 
@@ -177,7 +177,7 @@ Controls how API routes, events, and database tables are recognized. All fields 
 
 ```toml
 [detectors.api]
-frameworks = ["axum"]          # default
+frameworks = ["axum", "net/http"]   # default — axum (Rust) and Go 1.22+ net/http routing
 
 [detectors.events]
 strategy = "marker_trait"      # or "naming_convention"
@@ -215,7 +215,7 @@ A `[[links]]` entry naming the exact contract on one side gives a `Declared` mat
 | [`impact-lang-rust`](crates/impact-lang-rust) | The Rust adapter: functions, types, traits, enum variants, match-arm references, axum/sqlx/event contract detectors. |
 | [`impact-lang-ts`](crates/impact-lang-ts) | TypeScript/TSX and JavaScript/JSX (React, React Native): functions, classes, methods, cross-file call resolution — including calls hidden inside JSX expressions. |
 | [`impact-lang-python`](crates/impact-lang-python) | Functions, classes, methods, cross-file call resolution, pytest-style test detection. |
-| [`impact-lang-go`](crates/impact-lang-go) | Functions, types, receiver methods (Go's top-level `method_declaration`, not nested in a class body), `go test`-style test detection. |
+| [`impact-lang-go`](crates/impact-lang-go) | Functions, types, receiver methods (Go's top-level `method_declaration`, not nested in a class body), `go test`-style test detection, `net/http` method-prefixed route detection. |
 | [`impact-lang-kotlin`](crates/impact-lang-kotlin) | Functions, classes, methods, JUnit `@Test` detection. |
 | [`impact-lang-swift`](crates/impact-lang-swift) | Functions, classes, methods, XCTest (`XCTestCase` inheritance) test detection. |
 | [`impact-cli`](crates/impact-cli) | The `impact` binary — CLI subcommands and the MCP server, both built on one shared computation layer (`ops.rs`) so they can never drift from each other. |

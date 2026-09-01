@@ -36,10 +36,10 @@ pub fn index_project(
     }
 
     let config = DetectorConfig::load(&project_root)?;
-    let rust_adapter = RustAdapter::new(config);
+    let rust_adapter = RustAdapter::new(config.clone());
     let ts_adapter = TsAdapter;
     let python_adapter = PythonAdapter;
-    let go_adapter = GoAdapter;
+    let go_adapter = GoAdapter::new(config);
     let kotlin_adapter = KotlinAdapter;
     let swift_adapter = SwiftAdapter;
     let adapters: Vec<&dyn LanguageAdapter> = vec![

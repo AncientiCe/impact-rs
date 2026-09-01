@@ -31,7 +31,7 @@ pub struct DetectorConfig {
 impl Default for DetectorConfig {
     fn default() -> Self {
         Self {
-            api_frameworks: vec!["axum".to_string()],
+            api_frameworks: vec!["axum".to_string(), "net/http".to_string()],
             event_strategy: EventStrategy::default(),
             event_marker_trait: "Event".to_string(),
             event_naming_suffix: "Event".to_string(),

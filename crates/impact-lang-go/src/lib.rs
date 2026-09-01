@@ -1,7 +1,8 @@
 //! A Go `LanguageAdapter`. Mirrors every other adapter's structure and scope boundaries
 //! (see `impact-lang-ts`'s module doc): functions, types, and methods
-//! (`extract_symbols`), calls (`extract_references`), no contract detection
-//! (`extract_contract_refs` always returns empty — an honest empty result, not a stub).
+//! (`extract_symbols`), calls (`extract_references`). Contract detection
+//! (`extract_contract_refs`) is scoped to one API route shape — see below — with no
+//! events/database detection, an honest empty result for those rather than a stub.
 //!
 //! Structurally different from the others in one way, confirmed via a real parse-tree
 //! dump before writing this: Go has no impl-block/class-body nesting at all. A method is
@@ -15,18 +16,46 @@
 //! `_test.go` file — not a third-party framework choice, so (like Python's `test`-prefix
 //! convention, and unlike TypeScript's fragmented Jest/Vitest/Mocha situation) it's cheap
 //! and unambiguous enough to wire up.
+//!
+//! Also detects one API contract shape (gated on `impact.toml`'s `api_frameworks`
+//! containing `"net/http"`, on by default): `net/http`'s Go 1.22+ enhanced routing,
+//! `mux.HandleFunc("METHOD /path", handler)` — a method-prefixed pattern string, which
+//! happens to already be exactly the `"{VERB} {path}"` shape `impact-lang-rust`'s axum
+//! detector produces, so a Go and a Rust service registering the same route are
+//! identity-matchable across a workspace with no extra normalization. Older,
+//! method-less patterns (`mux.HandleFunc("/path", handler)`) aren't recognized — there's
+//! no verb to report, and guessing one would be exactly the kind of silent wrong answer
+//! this tool exists to avoid.
 
 use std::path::Path;
 
-use impact_core::{ContractRef, EdgeKind, FileAst, LanguageAdapter, NodeKind, RefDecl, SymbolDecl};
+use impact_core::{
+    ContractKind, ContractRef, ContractRole, DetectorConfig, EdgeKind, FileAst, LanguageAdapter,
+    NodeKind, RefDecl, SymbolDecl,
+};
 use tree_sitter::Node;
 
-#[derive(Default)]
-pub struct GoAdapter;
+const HTTP_VERBS: &[&str] = &[
+    "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "CONNECT", "TRACE",
+];
+
+pub struct GoAdapter {
+    config: DetectorConfig,
+}
 
 impl GoAdapter {
+    pub fn new(config: DetectorConfig) -> Self {
+        Self { config }
+    }
+
     fn language() -> tree_sitter::Language {
         tree_sitter_go::LANGUAGE.into()
+    }
+}
+
+impl Default for GoAdapter {
+    fn default() -> Self {
+        Self::new(DetectorConfig::default())
     }
 }
 
@@ -79,8 +108,15 @@ impl LanguageAdapter for GoAdapter {
         out
     }
 
-    fn extract_contract_refs(&self, _ast: &FileAst) -> Vec<ContractRef> {
-        Vec::new()
+    fn extract_contract_refs(&self, ast: &FileAst) -> Vec<ContractRef> {
+        let mut out = Vec::new();
+        collect_contracts(
+            ast.tree.root_node(),
+            ast.source.as_bytes(),
+            &self.config,
+            &mut out,
+        );
+        out
     }
 }
 
@@ -265,4 +301,66 @@ fn collect_refs(
             }
         }
     }
+}
+
+/// Walks the whole file looking for `net/http` route registrations. Unlike `collect_refs`,
+/// this doesn't need to track an enclosing function: a route's `symbol_name` is the
+/// handler being registered, not whichever function happens to make the registration
+/// call, so a plain recursive walk (no prefix/current-function bookkeeping) is enough.
+fn collect_contracts(
+    node: Node,
+    source: &[u8],
+    config: &DetectorConfig,
+    out: &mut Vec<ContractRef>,
+) {
+    if node.kind() == "call_expression" && config.api_frameworks.iter().any(|f| f == "net/http") {
+        if let Some((verb, path, handler)) = net_http_route_call(node, source) {
+            out.push(ContractRef {
+                contract_kind: ContractKind::ApiRoute,
+                contract_id: format!("{verb} {path}"),
+                symbol_name: handler,
+                role: ContractRole::Produces,
+            });
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_contracts(child, source, config, out);
+    }
+}
+
+/// A `mux.HandleFunc("METHOD /path", handler)` registration, if `call` is one — see the
+/// module doc for why only the method-prefixed (Go 1.22+) pattern form is recognized.
+fn net_http_route_call(call: Node, source: &[u8]) -> Option<(String, String, String)> {
+    let function = call.child_by_field_name("function")?;
+    if function.kind() != "selector_expression" {
+        return None;
+    }
+    let field = field_text(function, "field", source)?;
+    if field != "HandleFunc" {
+        return None;
+    }
+    let arguments = call.child_by_field_name("arguments")?;
+    let pattern_arg = arguments.named_child(0)?;
+    let pattern = string_literal_text(pattern_arg, source)?;
+    let (verb, path) = pattern.split_once(' ')?;
+    if !HTTP_VERBS.contains(&verb) {
+        return None;
+    }
+
+    let handler_arg = arguments.named_child(1)?;
+    let handler = last_identifier_text(handler_arg, source)?.to_string();
+
+    Some((verb.to_string(), path.to_string(), handler))
+}
+
+/// Strips the surrounding quotes from a Go interpreted string literal's raw source text.
+/// Doesn't handle escape sequences or raw (backtick-quoted) string literals — route
+/// patterns in practice need neither.
+fn string_literal_text(node: Node, source: &[u8]) -> Option<String> {
+    if node.kind() != "interpreted_string_literal" {
+        return None;
+    }
+    let text = node.utf8_text(source).ok()?;
+    Some(text.trim_matches('"').to_string())
 }
