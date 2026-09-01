@@ -126,6 +126,49 @@ or add it manually to any MCP-speaking client's config:
 }
 ```
 
+## Using this with an agent
+
+Registering the MCP server (above) only gives an agent the *tools*; it still needs telling *when* to call them. `impact install` does both in one step for Cursor, Codex, Claude Code, and Claude Desktop — it registers the MCP server and writes an agent rule (a standalone `.cursor/rules/impact.mdc` for Cursor, a managed block in `AGENTS.md`/`CLAUDE.md` for Codex/Claude) with the same instructions every time, so every project gets consistent behavior instead of only the ones wired up by hand:
+
+```bash
+impact install                 # all four clients, user (global) scope
+impact install --client cursor --scope project
+impact doctor                  # check what's configured and whether the rule is current
+```
+
+The rule text `impact install` writes — reproduced here for any other MCP-speaking agent (or CI system prompt) it doesn't have a built-in installer for:
+
+```text
+# Impact Blast-Radius Protocol — MANDATORY
+
+**MANDATORY — two hard triggers, every task, no exceptions.**
+
+## BEFORE EDITING
+*Before renaming, removing, or changing the signature of any function, type, enum
+variant, or field — or touching code behind an API route, event, or database table.*
+→ If this project hasn't been indexed yet this session (or has changed since), call
+  `impact_index` once with the project root.
+→ Then call `impact_file` (blast radius of a file) or `impact_change` (blast radius of a
+  specific rename/remove/signature change — e.g. `"rename PaymentStatus::Failed"`,
+  `"remove field User.email"`, `"change signature of PaymentService::charge"`) to see
+  direct/indirect callers, API routes, event types, database tables, and affected tests
+  before writing the change.
+→ Treat a nonzero result as a checklist: update every caller and affected test the
+  report names, not just the file you were asked to change.
+
+## AFTER EDITING
+*After the change is made, before considering the task done.*
+→ Re-run `impact_index` (results are only as fresh as the last index), then re-run
+  `impact_file`/`impact_change` against the same target to confirm the blast radius you
+  addressed matches what's reported now, and nothing new appeared.
+
+`impact_change` grammar: `rename <path>`, `rename <path> to <path>`, `remove <path>`,
+`remove variant <Enum>::<Variant>`, `remove field <Type>.<field>`, `change signature of
+<path>`. Not natural language — an unrecognized description is a hard error.
+```
+
+This is exactly what `impact install` generates (`crates/impact-cli/src/install/rule.rs`), not a paraphrase — pasting it verbatim into any other agent's system prompt or rules mechanism gets the same behavior `impact install`'s supported clients get automatically.
+
 ## Configuration
 
 ### `impact.toml` (per-project detector config)
