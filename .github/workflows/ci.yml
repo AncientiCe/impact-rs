@@ -181,5 +181,6 @@ jobs:
         shell: bash
         run: |
           tmp_cache="$(mktemp -d)"
-          impact index crates/impact-cli/tests/fixtures/toy_crate --cache-dir "$tmp_cache"
-          impact query crates/impact-cli/tests/fixtures/toy_crate/src/lib.rs --project crates/impact-cli/tests/fixtures/toy_crate --cache-dir "$tmp_cache"
+          fixture="crates/impact-cli/tests/fixtures/toy_crate"
+          impact index "$fixture" --cache-dir "$tmp_cache"
+          impact query src/lib.rs --project "$fixture" --cache-dir "$tmp_cache"
