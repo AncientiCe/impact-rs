@@ -174,13 +174,14 @@ This is exactly what `impact install` generates (`crates/impact-cli/src/install/
 
 ## Configuration
 
-### `impact.toml` (per-project detector config)
+### `impact.toml` (per-project detector and index config)
 
-Controls how API routes, events, and database tables are recognized. All fields are optional — a project with no `impact.toml` still gets useful detection from the defaults shown below.
+Controls how API routes, events, and database tables are recognized, and which files the indexer skips. All fields are optional — a project with no `impact.toml` still gets useful detection from the defaults shown below.
 
 ```toml
 [detectors.api]
-frameworks = ["axum", "net/http"]   # default — axum (Rust) and Go 1.22+ net/http routing
+# default — axum/net-http (Rust/Go), FastAPI+Flask (Python), Express+Fastify (TS/JS)
+frameworks = ["axum", "net/http", "fastapi", "flask", "express", "fastify"]
 
 [detectors.events]
 strategy = "marker_trait"      # or "naming_convention"
@@ -189,6 +190,9 @@ naming_suffix = "Event"        # default, used when strategy = "naming_conventio
 
 [detectors.database]
 macros = ["query", "query_as", "query_scalar"]   # default (sqlx-family)
+
+[index]
+exclude = []   # default — extra glob patterns to skip beyond what .gitignore already covers
 ```
 
 ### `workspace.toml` (cross-project registry)

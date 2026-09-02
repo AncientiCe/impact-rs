@@ -55,6 +55,13 @@ impl Default for DetectorConfig {
 #[serde(default)]
 struct ImpactToml {
     detectors: DetectorConfigToml,
+    index: IndexConfigToml,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct IndexConfigToml {
+    exclude: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -85,18 +92,28 @@ struct DatabaseToml {
     macros: Option<Vec<String>>,
 }
 
+/// Loads and parses `<project_root>/impact.toml`, or `None` if it doesn't exist — shared
+/// by every config type that reads from this one file, so it's only read/parsed once
+/// per config load rather than once per section.
+fn parse_impact_toml(project_root: &Path) -> Result<Option<ImpactToml>> {
+    let path = project_root.join("impact.toml");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let parsed: ImpactToml =
+        toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    Ok(Some(parsed))
+}
+
 impl DetectorConfig {
     /// Loads `<project_root>/impact.toml` if present, overlaying only the fields it sets
     /// onto the defaults. A missing file is not an error — it just means defaults.
     pub fn load(project_root: &Path) -> Result<Self> {
-        let path = project_root.join("impact.toml");
-        if !path.exists() {
+        let Some(parsed) = parse_impact_toml(project_root)? else {
             return Ok(Self::default());
-        }
-        let raw = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading {}", path.display()))?;
-        let parsed: ImpactToml =
-            toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+        };
 
         let mut config = Self::default();
         if let Some(frameworks) = parsed.detectors.api.frameworks {
@@ -115,5 +132,29 @@ impl DetectorConfig {
             config.database_macros = macros;
         }
         Ok(config)
+    }
+}
+
+/// Extra glob patterns (relative to the project root, matched the same way a
+/// `LanguageAdapter`'s own `file_globs` are) for files the indexer should skip even
+/// though some adapter's globs would otherwise claim them — vendored or generated code
+/// that isn't already excluded by `.gitignore` (which the indexer's file walker already
+/// respects on its own). Empty by default: nothing is excluded beyond what `.gitignore`
+/// already covers.
+#[derive(Debug, Clone, Default)]
+pub struct IndexConfig {
+    pub exclude: Vec<String>,
+}
+
+impl IndexConfig {
+    /// Loads `<project_root>/impact.toml`'s `[index]` table if present. A missing file,
+    /// or a file with no `[index]` table, just means no extra excludes.
+    pub fn load(project_root: &Path) -> Result<Self> {
+        let Some(parsed) = parse_impact_toml(project_root)? else {
+            return Ok(Self::default());
+        };
+        Ok(Self {
+            exclude: parsed.index.exclude.unwrap_or_default(),
+        })
     }
 }

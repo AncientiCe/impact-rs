@@ -24,6 +24,7 @@ pub struct IndexStats {
 pub struct Indexer<'a> {
     project_id: String,
     adapters: Vec<&'a dyn LanguageAdapter>,
+    exclude: Vec<String>,
 }
 
 impl<'a> Indexer<'a> {
@@ -31,7 +32,15 @@ impl<'a> Indexer<'a> {
         Self {
             project_id: project_id.into(),
             adapters,
+            exclude: Vec::new(),
         }
+    }
+
+    /// Extra glob patterns (see `IndexConfig::exclude`) that skip a file even though some
+    /// adapter's globs would otherwise claim it.
+    pub fn with_exclude(mut self, exclude: Vec<String>) -> Self {
+        self.exclude = exclude;
+        self
     }
 
     pub fn index(&self, project_root: &Path, cache: &mut Cache) -> Result<IndexStats> {
@@ -39,6 +48,7 @@ impl<'a> Indexer<'a> {
         let mut stats = IndexStats::default();
 
         let routed = self.build_routes()?;
+        let exclude = self.build_exclude()?;
 
         for entry in WalkBuilder::new(project_root).build() {
             let entry = entry?;
@@ -48,6 +58,10 @@ impl<'a> Indexer<'a> {
             let path = entry.path();
             let rel = path.strip_prefix(project_root)?;
             let rel_str = rel.to_string_lossy().replace('\\', "/");
+
+            if exclude.is_match(&rel_str) {
+                continue;
+            }
 
             let Some(adapter) = routed
                 .iter()
@@ -161,5 +175,13 @@ impl<'a> Indexer<'a> {
                 Ok((*adapter, builder.build()?))
             })
             .collect()
+    }
+
+    fn build_exclude(&self) -> Result<GlobSet> {
+        let mut builder = GlobSetBuilder::new();
+        for pattern in &self.exclude {
+            builder.add(Glob::new(pattern)?);
+        }
+        Ok(builder.build()?)
     }
 }

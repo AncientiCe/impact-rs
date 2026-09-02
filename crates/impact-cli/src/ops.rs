@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use impact_core::{
-    Cache, ChangeSpec, DetectorConfig, ImpactReport, IndexStats, Indexer, LanguageAdapter,
-    Workspace, WorkspaceImpactReport,
+    Cache, ChangeSpec, DetectorConfig, ImpactReport, IndexConfig, IndexStats, Indexer,
+    LanguageAdapter, Workspace, WorkspaceImpactReport,
 };
 use impact_lang_go::GoAdapter;
 use impact_lang_kotlin::KotlinAdapter;
@@ -50,7 +50,8 @@ pub fn index_project(
         &kotlin_adapter,
         &swift_adapter,
     ];
-    let indexer = Indexer::new(project_id, adapters);
+    let index_config = IndexConfig::load(&project_root)?;
+    let indexer = Indexer::new(project_id, adapters).with_exclude(index_config.exclude);
 
     indexer.index(&project_root, &mut cache)
 }
