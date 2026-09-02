@@ -482,10 +482,15 @@ fn print_report(
 
 fn print_dependents(dependents: &[impact_core::Dependent]) {
     for d in dependents {
+        let location = if d.file.is_empty() {
+            String::new()
+        } else {
+            format!("  {}:{}", d.file, d.line)
+        };
         match d.confidence {
-            Confidence::Exact => println!("  {}", d.path),
-            Confidence::Probable => println!("  {} [probable]", d.path),
-            Confidence::Heuristic => println!("  {} [heuristic]", d.path),
+            Confidence::Exact => println!("  {}{location}", d.path),
+            Confidence::Probable => println!("  {}{location} [probable]", d.path),
+            Confidence::Heuristic => println!("  {}{location} [heuristic]", d.path),
         }
     }
 }
@@ -509,6 +514,7 @@ fn print_tree_text(report: &ImpactReport) {
     }
     println!("TESTS");
     println!("  {} affected tests", report.tests);
+    print_dependents(&report.affected_tests);
 }
 
 fn print_cross_project_text(matches: &[CrossProjectMatch]) {

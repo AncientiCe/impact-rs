@@ -64,13 +64,13 @@ fn kotlin_adapter_resolves_calls_across_files_and_detects_junit_tests() {
     let report = query(cache_dir.path(), "Util.kt");
     assert_eq!(
         report["direct"],
-        serde_json::json!([{"path": "Service::process", "confidence": "Exact"}])
+        serde_json::json!([{"path": "Service::process", "file": "Service.kt", "line": 1, "confidence": "Exact"}])
     );
     assert_eq!(
         report["indirect"],
         serde_json::json!([
-            {"path": "Consumer::Consumer::run", "confidence": "Exact"},
-            {"path": "ProcessTest::ProcessTest::testProcess", "confidence": "Exact"},
+            {"path": "Consumer::Consumer::run", "file": "Consumer.kt", "line": 2, "confidence": "Exact"},
+            {"path": "ProcessTest::ProcessTest::testProcess", "file": "ProcessTest.kt", "line": 4, "confidence": "Exact"},
         ])
     );
     assert_eq!(report["tests"], 1);

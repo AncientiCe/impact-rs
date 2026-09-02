@@ -144,7 +144,7 @@ fn index_file_and_change_tools_work_over_the_real_protocol() {
     let file_result = tool_result_json(&responses[1]);
     assert_eq!(
         file_result["direct"],
-        serde_json::json!([{"path": "handlers::PaymentHandler::create_payment_route", "confidence": "Exact"}])
+        serde_json::json!([{"path": "handlers::PaymentHandler::create_payment_route", "file": "src/handlers.rs", "line": 6, "confidence": "Exact"}])
     );
     assert_eq!(file_result["api"], serde_json::json!(["POST /payments"]));
     assert_eq!(file_result["events"], serde_json::json!(["PaymentCreated"]));
@@ -155,8 +155,8 @@ fn index_file_and_change_tools_work_over_the_real_protocol() {
     assert_eq!(
         change_result["direct"],
         serde_json::json!([
-            {"path": "handlers::PaymentHandler::create_payment_route", "confidence": "Exact"},
-            {"path": "repo::save_payment_persists", "confidence": "Exact"},
+            {"path": "handlers::PaymentHandler::create_payment_route", "file": "src/handlers.rs", "line": 6, "confidence": "Exact"},
+            {"path": "repo::save_payment_persists", "file": "src/repo.rs", "line": 7, "confidence": "Exact"},
         ])
     );
     assert_eq!(change_result["tests"], 2);
@@ -308,7 +308,7 @@ fn impact_file_min_confidence_filters_heuristic_entries() {
     let result = tool_result_json(&responses[1]);
     assert_eq!(
         result["direct"],
-        serde_json::json!([{"path": "caller::call_precise", "confidence": "Exact"}])
+        serde_json::json!([{"path": "caller::call_precise", "file": "src/caller.rs", "line": 12, "confidence": "Exact"}])
     );
 }
 
@@ -356,10 +356,10 @@ fn impact_diff_reaches_the_same_diff_to_symbol_mapping_as_the_cli() {
     let result = tool_result_json(&responses[1]);
     assert_eq!(
         result["direct"],
-        serde_json::json!([{"path": "payment::controller::PaymentController::handle", "confidence": "Exact"}])
+        serde_json::json!([{"path": "payment::controller::PaymentController::handle", "file": "src/payment/controller.rs", "line": 8, "confidence": "Exact"}])
     );
     assert_eq!(
         result["indirect"],
-        serde_json::json!([{"path": "order::OrderService::checkout", "confidence": "Exact"}])
+        serde_json::json!([{"path": "order::OrderService::checkout", "file": "src/order.rs", "line": 8, "confidence": "Exact"}])
     );
 }

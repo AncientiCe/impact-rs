@@ -60,8 +60,8 @@ fn direct_dependents_carry_per_entry_confidence() {
     assert_eq!(
         report["direct"],
         serde_json::json!([
-            {"path": "caller::call_ambiguous", "confidence": "Heuristic"},
-            {"path": "caller::call_precise", "confidence": "Exact"},
+            {"path": "caller::call_ambiguous", "file": "src/caller.rs", "line": 6, "confidence": "Heuristic"},
+            {"path": "caller::call_precise", "file": "src/caller.rs", "line": 12, "confidence": "Exact"},
         ])
     );
 }
@@ -78,6 +78,6 @@ fn min_confidence_exact_filters_out_heuristic_entries() {
 
     assert_eq!(
         report["direct"],
-        serde_json::json!([{"path": "caller::call_precise", "confidence": "Exact"}])
+        serde_json::json!([{"path": "caller::call_precise", "file": "src/caller.rs", "line": 12, "confidence": "Exact"}])
     );
 }

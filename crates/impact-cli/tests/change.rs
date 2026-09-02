@@ -27,14 +27,16 @@ fn index(fixture: &Path, cache_dir: &Path) {
     );
 }
 
-/// Builds the JSON shape a report's `direct`/`indirect` entries now carry: `{path,
-/// confidence}` pairs. Every path here resolves unambiguously in its fixture, so `Exact`
-/// is the right expected confidence throughout this file.
-fn exact(paths: &[&str]) -> Value {
+/// Builds the JSON shape a report's `direct`/`indirect` entries now carry: `{path, file,
+/// line, confidence}` objects. Every entry here resolves unambiguously in its fixture, so
+/// `Exact` is the right expected confidence throughout this file.
+fn exact(entries: &[(&str, &str, u64)]) -> Value {
     Value::Array(
-        paths
+        entries
             .iter()
-            .map(|p| serde_json::json!({"path": p, "confidence": "Exact"}))
+            .map(|(path, file, line)| {
+                serde_json::json!({"path": path, "file": file, "line": line, "confidence": "Exact"})
+            })
             .collect(),
     )
 }
@@ -73,8 +75,14 @@ fn remove_variant_finds_match_arms_across_files() {
         "remove variant status::PaymentStatus::Failed",
     );
 
-    assert_eq!(report["direct"], exact(&["display::describe"]));
-    assert_eq!(report["indirect"], exact(&["summary::summarize"]));
+    assert_eq!(
+        report["direct"],
+        exact(&[("display::describe", "src/display.rs", 3)])
+    );
+    assert_eq!(
+        report["indirect"],
+        exact(&[("summary::summarize", "src/summary.rs", 3)])
+    );
 }
 
 /// `rename`, `remove`, and `change signature of` all reduce to the same "blast radius of
@@ -91,10 +99,18 @@ fn rename_remove_and_signature_change_agree_on_the_same_symbol() {
     index(&contracts_fixture(), cache_dir.path());
 
     let expected_direct = exact(&[
-        "handlers::PaymentHandler::create_payment_route",
-        "repo::save_payment_persists",
+        (
+            "handlers::PaymentHandler::create_payment_route",
+            "src/handlers.rs",
+            6,
+        ),
+        ("repo::save_payment_persists", "src/repo.rs", 7),
     ]);
-    let expected_indirect = exact(&["e2e_tests::creates_payment_route_end_to_end"]);
+    let expected_indirect = exact(&[(
+        "e2e_tests::creates_payment_route_end_to_end",
+        "src/e2e_tests.rs",
+        4,
+    )]);
 
     for description in [
         "rename repo::save_payment",

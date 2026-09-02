@@ -22,14 +22,16 @@ fn index(cache_dir: &Path) {
     );
 }
 
-/// Builds the JSON shape a report's `direct`/`indirect` entries now carry: `{path,
-/// confidence}` pairs. Every path here resolves unambiguously in its fixture, so `Exact`
-/// is the right expected confidence throughout this file.
-fn exact(paths: &[&str]) -> Value {
+/// Builds the JSON shape a report's `direct`/`indirect` entries now carry: `{path, file,
+/// line, confidence}` objects. Every entry here resolves unambiguously in its fixture, so
+/// `Exact` is the right expected confidence throughout this file.
+fn exact(entries: &[(&str, &str, u64)]) -> Value {
     Value::Array(
-        paths
+        entries
             .iter()
-            .map(|p| serde_json::json!({"path": p, "confidence": "Exact"}))
+            .map(|(path, file, line)| {
+                serde_json::json!({"path": path, "file": file, "line": line, "confidence": "Exact"})
+            })
             .collect(),
     )
 }
@@ -66,11 +68,15 @@ fn reports_direct_and_indirect_callers_across_files() {
 
     assert_eq!(
         report["direct"],
-        exact(&["payment::controller::PaymentController::handle"])
+        exact(&[(
+            "payment::controller::PaymentController::handle",
+            "src/payment/controller.rs",
+            8
+        )])
     );
     assert_eq!(
         report["indirect"],
-        exact(&["order::OrderService::checkout"])
+        exact(&[("order::OrderService::checkout", "src/order.rs", 8)])
     );
 }
 

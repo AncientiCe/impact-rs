@@ -60,7 +60,7 @@ fn net_http_method_prefixed_route_is_detected_unprefixed_is_not() {
 
     assert_eq!(
         report["direct"],
-        serde_json::json!([{"path": "handlers::createPaymentRoute", "confidence": "Exact"}])
+        serde_json::json!([{"path": "handlers::createPaymentRoute", "file": "handlers.go", "line": 3, "confidence": "Exact"}])
     );
     assert_eq!(report["api"], serde_json::json!(["POST /payments"]));
 }

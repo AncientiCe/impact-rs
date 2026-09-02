@@ -66,11 +66,11 @@ fn typescript_adapter_resolves_calls_across_files() {
     let report = query(cache_dir.path(), "src/util.ts");
     assert_eq!(
         report["direct"],
-        serde_json::json!([{"path": "service::process", "confidence": "Exact"}])
+        serde_json::json!([{"path": "service::process", "file": "src/service.ts", "line": 3, "confidence": "Exact"}])
     );
     assert_eq!(
         report["indirect"],
-        serde_json::json!([{"path": "caller::Runner::run", "confidence": "Exact"}])
+        serde_json::json!([{"path": "caller::Runner::run", "file": "src/caller.ts", "line": 4, "confidence": "Exact"}])
     );
 }
 
@@ -94,8 +94,8 @@ fn jsx_and_tsx_call_sites_resolve_across_files() {
     assert_eq!(
         report["direct"],
         serde_json::json!([
-            {"path": "PlainWidget::PlainWidget", "confidence": "Exact"},
-            {"path": "Widget::Widget", "confidence": "Exact"},
+            {"path": "PlainWidget::PlainWidget", "file": "src/PlainWidget.jsx", "line": 3, "confidence": "Exact"},
+            {"path": "Widget::Widget", "file": "src/Widget.tsx", "line": 3, "confidence": "Exact"},
         ])
     );
     assert_eq!(report["indirect"], serde_json::json!([]));

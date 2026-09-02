@@ -16,13 +16,18 @@ use crate::linker::Resolver;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Dependent {
     pub path: String,
+    /// File the dependent is declared in, relative to the project root — `""` if the
+    /// graph has no location for it (shouldn't happen for a real symbol node).
+    pub file: String,
+    /// 1-indexed declaration line, matching `file` — `0` alongside an empty `file`.
+    pub line: usize,
     pub confidence: Confidence,
 }
 
 /// The blast radius of a change: who's affected directly, who's affected transitively
 /// through them, which API routes / event types / database tables the affected symbols
-/// touch, and how many tests exercise any of it. Sorted, so the same graph always
-/// produces the same report — determinism is the whole point of this tool.
+/// touch, and which tests exercise any of it. Sorted, so the same graph always produces
+/// the same report — determinism is the whole point of this tool.
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 pub struct ImpactReport {
     pub direct: Vec<Dependent>,
@@ -30,21 +35,31 @@ pub struct ImpactReport {
     pub api: Vec<String>,
     pub events: Vec<String>,
     pub database: Vec<String>,
+    /// How many of the dependents found (`direct` + `indirect`) are test functions —
+    /// redundant with `affected_tests.len()`, kept as its own field since a plain count
+    /// is what most tree-text/agent consumers actually want to read at a glance.
     pub tests: usize,
+    /// The test dependents themselves (a subset of `direct`/`indirect`, already carrying
+    /// their own file/line), so an agent can run exactly these instead of the whole
+    /// suite. Sorted the same way `direct`/`indirect` are.
+    pub affected_tests: Vec<Dependent>,
 }
 
-/// Drops `direct`/`indirect` entries below `min` confidence, leaving `api`/`events`/
-/// `database`/`tests` untouched — those don't carry a confidence tier of their own.
+/// Drops `direct`/`indirect`/`affected_tests` entries below `min` confidence (and
+/// recomputes `tests` to match `affected_tests.len()` afterward), leaving `api`/`events`/
+/// `database` untouched — those don't carry a confidence tier of their own.
 pub fn filter_min_confidence(mut report: ImpactReport, min: Confidence) -> ImpactReport {
     report.direct.retain(|d| d.confidence.at_least(min));
     report.indirect.retain(|d| d.confidence.at_least(min));
+    report.affected_tests.retain(|d| d.confidence.at_least(min));
+    report.tests = report.affected_tests.len();
     report
 }
 
 /// Computes the full blast radius of `seeds`: DIRECT (1-hop reverse dependents) and
 /// INDIRECT (2+-hop reverse dependents), then the API/EVENTS/DATABASE contracts reachable
-/// from the seeds or any of their dependents, and finally a count of how many of the
-/// dependents found are test functions.
+/// from the seeds or any of their dependents, and finally which of the dependents found
+/// are test functions (`affected_tests`, plus its own count as `tests`).
 ///
 /// "Reverse dependent" walks backward over `Calls`/`References` edges (who calls this)
 /// *and* `Produces`/`Consumes`/`Reads`/`Writes` edges (who touches this contract) as one
@@ -72,8 +87,8 @@ fn compute_impact(graph: &SymbolGraph, seeds: HashSet<NodeId>) -> ImpactReport {
         }
     }
 
-    let mut direct: BTreeMap<String, Confidence> = BTreeMap::new();
-    let mut indirect: BTreeMap<String, Confidence> = BTreeMap::new();
+    let mut direct: BTreeMap<String, (Confidence, NodeId)> = BTreeMap::new();
+    let mut indirect: BTreeMap<String, (Confidence, NodeId)> = BTreeMap::new();
     let mut visited: HashSet<NodeId> = seeds.clone();
     // A seed is definitionally certain — the first hop off of it inherits the edge's own
     // confidence unmodified, which `weaker` below achieves by starting at `Exact`.
@@ -105,8 +120,8 @@ fn compute_impact(graph: &SymbolGraph, seeds: HashSet<NodeId>) -> ImpactReport {
                 let bucket = if hop == 1 { &mut direct } else { &mut indirect };
                 bucket
                     .entry(name)
-                    .and_modify(|c| *c = (*c).weaker(confidence))
-                    .or_insert(confidence);
+                    .and_modify(|(c, _)| *c = (*c).weaker(confidence))
+                    .or_insert((confidence, caller.clone()));
                 next.push(caller.clone());
             }
         }
@@ -146,26 +161,41 @@ fn compute_impact(graph: &SymbolGraph, seeds: HashSet<NodeId>) -> ImpactReport {
         }
     }
 
-    let tests = visited
-        .iter()
-        .filter(|id| !seeds.contains(*id))
-        .filter_map(|id| graph.node(id))
-        .filter(|n| n.is_test)
-        .count();
+    let to_dependent = |path: String, confidence: Confidence, id: &NodeId| {
+        let (file, line) = graph
+            .node(id)
+            .map(|n| (n.file.clone(), n.line))
+            .unwrap_or_default();
+        Dependent {
+            path,
+            file,
+            line,
+            confidence,
+        }
+    };
+
+    let mut affected_tests: BTreeMap<String, Dependent> = BTreeMap::new();
+    for (path, (confidence, id)) in direct.iter().chain(indirect.iter()) {
+        if graph.node(id).is_some_and(|n| n.is_test) {
+            affected_tests.insert(path.clone(), to_dependent(path.clone(), *confidence, id));
+        }
+    }
+    let tests = affected_tests.len();
 
     ImpactReport {
         direct: direct
             .into_iter()
-            .map(|(path, confidence)| Dependent { path, confidence })
+            .map(|(path, (confidence, id))| to_dependent(path, confidence, &id))
             .collect(),
         indirect: indirect
             .into_iter()
-            .map(|(path, confidence)| Dependent { path, confidence })
+            .map(|(path, (confidence, id))| to_dependent(path, confidence, &id))
             .collect(),
         api: api.into_iter().collect(),
         events: events.into_iter().collect(),
         database: database.into_iter().collect(),
         tests,
+        affected_tests: affected_tests.into_values().collect(),
     }
 }
 

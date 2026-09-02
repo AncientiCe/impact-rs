@@ -47,6 +47,6 @@ fn generic_impl_method_qualified_path_has_no_type_parameters() {
 
     assert_eq!(
         report["direct"],
-        serde_json::json!([{"path": "container::Container::get", "confidence": "Exact"}])
+        serde_json::json!([{"path": "container::Container::get", "file": "src/container.rs", "line": 6, "confidence": "Exact"}])
     );
 }

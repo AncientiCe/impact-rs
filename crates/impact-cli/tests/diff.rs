@@ -65,11 +65,11 @@ fn diff_touching_a_function_body_resolves_to_the_enclosing_function() {
 
     assert_eq!(
         report["direct"],
-        serde_json::json!([{"path": "payment::controller::PaymentController::handle", "confidence": "Exact"}])
+        serde_json::json!([{"path": "payment::controller::PaymentController::handle", "file": "src/payment/controller.rs", "line": 8, "confidence": "Exact"}])
     );
     assert_eq!(
         report["indirect"],
-        serde_json::json!([{"path": "order::OrderService::checkout", "confidence": "Exact"}])
+        serde_json::json!([{"path": "order::OrderService::checkout", "file": "src/order.rs", "line": 8, "confidence": "Exact"}])
     );
 }
 
@@ -148,6 +148,6 @@ fn diff_file_flag_reads_from_a_file_instead_of_stdin() {
 
     assert_eq!(
         report["direct"],
-        serde_json::json!([{"path": "payment::controller::PaymentController::handle", "confidence": "Exact"}])
+        serde_json::json!([{"path": "payment::controller::PaymentController::handle", "file": "src/payment/controller.rs", "line": 8, "confidence": "Exact"}])
     );
 }

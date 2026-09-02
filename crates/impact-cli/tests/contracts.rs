@@ -1,6 +1,8 @@
 use std::path::Path;
 
 use assert_cmd::Command;
+use predicates::prelude::*;
+use predicates::str::contains;
 use serde_json::Value;
 
 fn fixture_path() -> std::path::PathBuf {
@@ -22,14 +24,17 @@ fn index(cache_dir: &Path) {
     );
 }
 
-/// Builds the JSON shape a report's `direct`/`indirect` entries now carry: `{path,
-/// confidence}` pairs. Every path here resolves unambiguously in its fixture, so `Exact`
-/// is the right expected confidence throughout this file.
-fn exact(paths: &[&str]) -> Value {
+/// Builds the JSON shape a report's `direct`/`indirect`/`affected_tests` entries now
+/// carry: `{path, file, line, confidence}` objects. Every entry here resolves
+/// unambiguously in its fixture, so `Exact` is the right expected confidence throughout
+/// this file.
+fn exact(entries: &[(&str, &str, u64)]) -> Value {
     Value::Array(
-        paths
+        entries
             .iter()
-            .map(|p| serde_json::json!({"path": p, "confidence": "Exact"}))
+            .map(|(path, file, line)| {
+                serde_json::json!({"path": path, "file": file, "line": line, "confidence": "Exact"})
+            })
             .collect(),
     )
 }
@@ -76,16 +81,32 @@ fn reports_api_events_database_and_tests_for_repo_file() {
 
     assert_eq!(
         report["direct"],
-        exact(&["handlers::PaymentHandler::create_payment_route"])
+        exact(&[(
+            "handlers::PaymentHandler::create_payment_route",
+            "src/handlers.rs",
+            6
+        )])
     );
     assert_eq!(
         report["indirect"],
-        exact(&["e2e_tests::creates_payment_route_end_to_end"])
+        exact(&[(
+            "e2e_tests::creates_payment_route_end_to_end",
+            "src/e2e_tests.rs",
+            4
+        )])
     );
     assert_eq!(report["api"], serde_json::json!(["POST /payments"]));
     assert_eq!(report["events"], serde_json::json!(["PaymentCreated"]));
     assert_eq!(report["database"], serde_json::json!(["payments"]));
     assert_eq!(report["tests"], 1);
+    assert_eq!(
+        report["affected_tests"],
+        exact(&[(
+            "e2e_tests::creates_payment_route_end_to_end",
+            "src/e2e_tests.rs",
+            4
+        )])
+    );
 }
 
 /// `events.rs` declares `PaymentCreated` but calls nothing itself — its blast radius is
@@ -112,16 +133,64 @@ fn event_declaration_file_reports_producers_and_consumers() {
     assert_eq!(
         report["direct"],
         exact(&[
-            "handlers::PaymentHandler::create_payment_route",
-            "handlers::PaymentHandler::on_payment_created",
+            (
+                "handlers::PaymentHandler::create_payment_route",
+                "src/handlers.rs",
+                6
+            ),
+            (
+                "handlers::PaymentHandler::on_payment_created",
+                "src/handlers.rs",
+                11
+            ),
         ])
     );
     assert_eq!(
         report["indirect"],
-        exact(&["e2e_tests::creates_payment_route_end_to_end"])
+        exact(&[(
+            "e2e_tests::creates_payment_route_end_to_end",
+            "src/e2e_tests.rs",
+            4
+        )])
     );
     assert_eq!(report["api"], serde_json::json!(["POST /payments"]));
     assert_eq!(report["events"], serde_json::json!(["PaymentCreated"]));
     assert_eq!(report["database"], serde_json::json!([]));
     assert_eq!(report["tests"], 1);
+}
+
+/// The tree-text (non-`--json`) rendering of `impact query` should print each
+/// DIRECT/INDIRECT dependent's `file:line` location alongside its qualified path, and
+/// list the affected test's own location under TESTS — not just the bare count — so a
+/// human (or an agent parsing stdout) can jump straight to what to look at without a
+/// second JSON round-trip.
+#[test]
+fn tree_text_output_includes_dependent_locations_and_affected_test_list() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    index(cache_dir.path());
+
+    let output = Command::cargo_bin("impact")
+        .unwrap()
+        .args(["query", "src/repo.rs"])
+        .arg("--project")
+        .arg(fixture_path())
+        .arg("--cache-dir")
+        .arg(cache_dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "impact query failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        contains("handlers::PaymentHandler::create_payment_route  src/handlers.rs:6").eval(&stdout),
+        "expected DIRECT entry with location, got:\n{stdout}"
+    );
+    assert!(
+        contains("e2e_tests::creates_payment_route_end_to_end  src/e2e_tests.rs:4").eval(&stdout),
+        "expected the affected test listed under TESTS with its location, got:\n{stdout}"
+    );
 }

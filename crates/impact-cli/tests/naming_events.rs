@@ -49,8 +49,8 @@ fn naming_convention_strategy_detects_event_from_impact_toml() {
     assert_eq!(
         report["direct"],
         serde_json::json!([
-            {"path": "handler::on_created", "confidence": "Exact"},
-            {"path": "handler::publish", "confidence": "Exact"},
+            {"path": "handler::on_created", "file": "src/handler.rs", "line": 8, "confidence": "Exact"},
+            {"path": "handler::publish", "file": "src/handler.rs", "line": 3, "confidence": "Exact"},
         ])
     );
     assert_eq!(report["events"], serde_json::json!(["PaymentCreatedEvent"]));

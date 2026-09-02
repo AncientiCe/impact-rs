@@ -68,13 +68,13 @@ fn swift_adapter_resolves_calls_across_files_and_detects_xctest_tests() {
     let report = query(cache_dir.path(), "Util.swift");
     assert_eq!(
         report["direct"],
-        serde_json::json!([{"path": "Service::process", "confidence": "Exact"}])
+        serde_json::json!([{"path": "Service::process", "file": "Service.swift", "line": 1, "confidence": "Exact"}])
     );
     assert_eq!(
         report["indirect"],
         serde_json::json!([
-            {"path": "Consumer::Consumer::run", "confidence": "Exact"},
-            {"path": "ProcessTests::ProcessTests::testProcess", "confidence": "Exact"},
+            {"path": "Consumer::Consumer::run", "file": "Consumer.swift", "line": 2, "confidence": "Exact"},
+            {"path": "ProcessTests::ProcessTests::testProcess", "file": "ProcessTests.swift", "line": 4, "confidence": "Exact"},
         ])
     );
     assert_eq!(report["tests"], 1);
