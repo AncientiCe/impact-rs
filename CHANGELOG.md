@@ -4,6 +4,10 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- The SQLite index cache now carries a schema version (`PRAGMA user_version`, `impact_core::cache::SCHEMA_VERSION`). `Cache::migrate` compares it against the current version on open and, if a previously-created cache is stale, wipes every table and re-stamps it before continuing — instead of silently trying to reuse rows in a shape the running binary no longer understands. Prints a one-line notice to stderr when this happens; a brand-new cache (nothing to wipe) stays silent. This is the precondition for evolving the cache schema (e.g. adding new columns) without requiring every user to remember `impact index --force` after an upgrade. 2 new behavior tests (`crates/impact-cli/tests/schema_version.rs`) hand-writing a pre-versioning-shaped cache.sqlite and confirming both the wipe-and-reindex path and the fresh-cache silent path.
+
 ## [0.3.0] - 2026-09-02
 
 ### Added

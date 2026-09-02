@@ -6,6 +6,13 @@ use rusqlite::{params, Connection};
 use crate::adapter::{ContractRef, ContractRole, RefDecl};
 use crate::graph::{ContractKind, Edge, EdgeKind, Node, SymbolGraph};
 
+/// Bumped whenever the table shapes below change in a way an already-cached database
+/// can't transparently keep using (a new column, a changed meaning for an existing one).
+/// `migrate` compares this against the database's own `PRAGMA user_version` and wipes
+/// every table before recreating them on a mismatch — simpler and safer than writing a
+/// column-by-column migration for a local, fully-rebuildable index cache.
+const SCHEMA_VERSION: i32 = 1;
+
 /// Per-project SQLite-backed cache of the last-indexed graph, keyed by file content hash
 /// so unchanged files can skip re-parsing on the next index run.
 pub struct Cache {
@@ -31,6 +38,29 @@ impl Cache {
     }
 
     fn migrate(conn: &Connection) -> Result<()> {
+        let stored_version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        // A brand-new cache (no `nodes` table yet) is never "stale" — it just hasn't been
+        // stamped with a version yet, so skip the wipe (a no-op on empty tables anyway)
+        // and the message that would otherwise print on every first-time `impact index`.
+        let has_existing_tables: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'nodes'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? > 0;
+        if has_existing_tables && stored_version < SCHEMA_VERSION {
+            eprintln!(
+                "impact: cache schema changed (v{stored_version} -> v{SCHEMA_VERSION}), wiping and re-indexing from scratch"
+            );
+            conn.execute_batch(
+                "
+                DROP TABLE IF EXISTS file_hashes;
+                DROP TABLE IF EXISTS nodes;
+                DROP TABLE IF EXISTS edges;
+                DROP TABLE IF EXISTS refs;
+                DROP TABLE IF EXISTS contract_refs;
+                ",
+            )?;
+        }
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS file_hashes (
@@ -70,6 +100,7 @@ impl Cache {
             CREATE INDEX IF NOT EXISTS contract_refs_file_idx ON contract_refs(file);
             ",
         )?;
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())
     }
 

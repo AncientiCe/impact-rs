@@ -411,6 +411,7 @@ dependencies = [
  "impact-lang-swift",
  "impact-lang-ts",
  "predicates",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
