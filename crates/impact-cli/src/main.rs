@@ -74,6 +74,10 @@ enum Command {
         /// `exact` hides anything the linker could only match by ambiguous short name.
         #[arg(long)]
         min_confidence: Option<MinConfidence>,
+        /// Show each INDIRECT entry's chain back to its nearest DIRECT dependent, so a
+        /// `[heuristic]` entry can be checked without re-reading code.
+        #[arg(long)]
+        explain: bool,
         /// Print machine-readable JSON instead of the tree-text report.
         #[arg(long)]
         json: bool,
@@ -100,6 +104,10 @@ enum Command {
         /// `exact` hides anything the linker could only match by ambiguous short name.
         #[arg(long)]
         min_confidence: Option<MinConfidence>,
+        /// Show each INDIRECT entry's chain back to its nearest DIRECT dependent, so a
+        /// `[heuristic]` entry can be checked without re-reading code.
+        #[arg(long)]
+        explain: bool,
         /// Print machine-readable JSON instead of the tree-text report.
         #[arg(long)]
         json: bool,
@@ -129,6 +137,10 @@ enum Command {
         /// `exact` hides anything the linker could only match by ambiguous short name.
         #[arg(long)]
         min_confidence: Option<MinConfidence>,
+        /// Show each INDIRECT entry's chain back to its nearest DIRECT dependent, so a
+        /// `[heuristic]` entry can be checked without re-reading code.
+        #[arg(long)]
+        explain: bool,
         /// Print machine-readable JSON instead of the tree-text report.
         #[arg(long)]
         json: bool,
@@ -213,6 +225,7 @@ fn main() -> anyhow::Result<()> {
             cache_dir,
             workspace,
             min_confidence,
+            explain,
             json,
         } => run_query(
             &path,
@@ -220,6 +233,7 @@ fn main() -> anyhow::Result<()> {
             cache_dir.as_deref(),
             workspace.as_deref(),
             min_confidence,
+            explain,
             json,
         ),
         Command::Change {
@@ -228,6 +242,7 @@ fn main() -> anyhow::Result<()> {
             cache_dir,
             workspace,
             min_confidence,
+            explain,
             json,
         } => run_change(
             &description,
@@ -235,6 +250,7 @@ fn main() -> anyhow::Result<()> {
             cache_dir.as_deref(),
             workspace.as_deref(),
             min_confidence,
+            explain,
             json,
         ),
         Command::Diff {
@@ -243,6 +259,7 @@ fn main() -> anyhow::Result<()> {
             cache_dir,
             workspace,
             min_confidence,
+            explain,
             json,
         } => run_diff(
             file.as_deref(),
@@ -250,6 +267,7 @@ fn main() -> anyhow::Result<()> {
             cache_dir.as_deref(),
             workspace.as_deref(),
             min_confidence,
+            explain,
             json,
         ),
         Command::Mcp => mcp::run(),
@@ -390,6 +408,7 @@ fn run_diff(
     cache_dir: Option<&Path>,
     workspace: Option<&Path>,
     min_confidence: Option<MinConfidence>,
+    explain: bool,
     json: bool,
 ) -> anyhow::Result<()> {
     let diff_text = match file {
@@ -406,7 +425,7 @@ fn run_diff(
     };
 
     let local = ops::diff_impact(&diff_text, project, cache_dir)?;
-    print_report(local, project, workspace, min_confidence, json)
+    print_report(local, project, workspace, min_confidence, explain, json)
 }
 
 fn run_index(path: &Path, cache_dir: Option<&Path>, force: bool, json: bool) -> anyhow::Result<()> {
@@ -429,10 +448,11 @@ fn run_query(
     cache_dir: Option<&Path>,
     workspace: Option<&Path>,
     min_confidence: Option<MinConfidence>,
+    explain: bool,
     json: bool,
 ) -> anyhow::Result<()> {
     let local = ops::query_file(path, project, cache_dir)?;
-    print_report(local, project, workspace, min_confidence, json)
+    print_report(local, project, workspace, min_confidence, explain, json)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -442,23 +462,27 @@ fn run_change(
     cache_dir: Option<&Path>,
     workspace: Option<&Path>,
     min_confidence: Option<MinConfidence>,
+    explain: bool,
     json: bool,
 ) -> anyhow::Result<()> {
     let local = ops::apply_change(description, project, cache_dir)?;
-    print_report(local, project, workspace, min_confidence, json)
+    print_report(local, project, workspace, min_confidence, explain, json)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn print_report(
     local: ImpactReport,
     project: Option<&Path>,
     workspace: Option<&Path>,
     min_confidence: Option<MinConfidence>,
+    explain: bool,
     json: bool,
 ) -> anyhow::Result<()> {
     let local = match min_confidence {
         Some(min) => impact_core::filter_min_confidence(local, min.into()),
         None => local,
     };
+    let local = impact_core::apply_explain(local, explain);
     match workspace {
         None => {
             if json {
@@ -491,6 +515,9 @@ fn print_dependents(dependents: &[impact_core::Dependent]) {
             Confidence::Exact => println!("  {}{location}", d.path),
             Confidence::Probable => println!("  {}{location} [probable]", d.path),
             Confidence::Heuristic => println!("  {}{location} [heuristic]", d.path),
+        }
+        if !d.via.is_empty() {
+            println!("    via {}", d.via.join(" -> "));
         }
     }
 }

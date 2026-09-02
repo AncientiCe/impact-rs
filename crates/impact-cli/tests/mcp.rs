@@ -363,3 +363,56 @@ fn impact_diff_reaches_the_same_diff_to_symbol_mapping_as_the_cli() {
         serde_json::json!([{"path": "order::OrderService::checkout", "file": "src/order.rs", "line": 8, "confidence": "Exact"}])
     );
 }
+
+/// `impact_file`'s `explain` argument reaches the same `apply_explain` the CLI's
+/// `query.rs` tests already verified — without it, an INDIRECT entry's `via` field is
+/// absent entirely; with it, `checkout`'s `via` chain names its one DIRECT dependent.
+#[test]
+fn impact_file_explain_populates_indirect_via_chain() {
+    fn fixture(name: &str) -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name)
+    }
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let project = fixture("multi_file");
+    let project_str = project.to_str().unwrap();
+    let cache_dir_str = cache_dir.path().to_str().unwrap();
+
+    let responses = mcp_round_trip(&[
+        tool_call(
+            1,
+            "impact_index",
+            serde_json::json!({"project_path": project_str, "cache_dir": cache_dir_str}),
+        ),
+        tool_call(
+            2,
+            "impact_file",
+            serde_json::json!({
+                "path": "src/payment/service.rs",
+                "project_path": project_str,
+                "cache_dir": cache_dir_str,
+            }),
+        ),
+        tool_call(
+            3,
+            "impact_file",
+            serde_json::json!({
+                "path": "src/payment/service.rs",
+                "project_path": project_str,
+                "cache_dir": cache_dir_str,
+                "explain": true,
+            }),
+        ),
+    ]);
+
+    let without_explain = tool_result_json(&responses[1]);
+    assert_eq!(without_explain["indirect"][0].get("via"), None);
+
+    let with_explain = tool_result_json(&responses[2]);
+    assert_eq!(
+        with_explain["indirect"][0]["via"],
+        serde_json::json!(["payment::controller::PaymentController::handle"])
+    );
+}

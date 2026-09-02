@@ -22,6 +22,13 @@ pub struct Dependent {
     /// 1-indexed declaration line, matching `file` — `0` alongside an empty `file`.
     pub line: usize,
     pub confidence: Confidence,
+    /// The intermediate dependents between the seed and this one, ordered nearest-seed
+    /// first — the shortest BFS chain that connects them, not necessarily the only one.
+    /// Always empty for a DIRECT entry (one hop from the seed, nothing intermediate to
+    /// show) and, by default, for an INDIRECT entry too: only populated when `explain`
+    /// is requested (see `apply_explain`), to keep a default report as compact as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub via: Vec<String>,
 }
 
 /// The blast radius of a change: who's affected directly, who's affected transitively
@@ -53,6 +60,25 @@ pub fn filter_min_confidence(mut report: ImpactReport, min: Confidence) -> Impac
     report.indirect.retain(|d| d.confidence.at_least(min));
     report.affected_tests.retain(|d| d.confidence.at_least(min));
     report.tests = report.affected_tests.len();
+    report
+}
+
+/// `compute_impact` always computes each INDIRECT entry's `via` chain (cheap — just
+/// following BFS parent pointers already built while walking the graph), but a default
+/// report should stay as compact as before `via` existed. Call this with `explain: false`
+/// (the default everywhere it's wired up) to clear it back out; `explain: true` leaves it
+/// populated.
+pub fn apply_explain(mut report: ImpactReport, explain: bool) -> ImpactReport {
+    if !explain {
+        for d in report
+            .direct
+            .iter_mut()
+            .chain(report.indirect.iter_mut())
+            .chain(report.affected_tests.iter_mut())
+        {
+            d.via.clear();
+        }
+    }
     report
 }
 
@@ -93,6 +119,9 @@ fn compute_impact(graph: &SymbolGraph, seeds: HashSet<NodeId>) -> ImpactReport {
     // A seed is definitionally certain — the first hop off of it inherits the edge's own
     // confidence unmodified, which `weaker` below achieves by starting at `Exact`.
     let mut node_confidence: HashMap<NodeId, Confidence> = HashMap::new();
+    // BFS parent pointers, for reconstructing an INDIRECT entry's `via` chain back to
+    // (but not including) the nearest seed — see `via_chain`.
+    let mut parent: HashMap<NodeId, NodeId> = HashMap::new();
 
     let mut frontier: Vec<NodeId> = seeds.iter().cloned().collect();
     let mut hop = 0;
@@ -113,6 +142,7 @@ fn compute_impact(graph: &SymbolGraph, seeds: HashSet<NodeId>) -> ImpactReport {
                 }
                 let confidence = incoming.weaker(*edge_confidence);
                 node_confidence.insert(caller.clone(), confidence);
+                parent.insert(caller.clone(), node_id.clone());
                 let name = graph
                     .node(caller)
                     .map(|n| n.qualified_path.clone())
@@ -171,6 +201,7 @@ fn compute_impact(graph: &SymbolGraph, seeds: HashSet<NodeId>) -> ImpactReport {
             file,
             line,
             confidence,
+            via: via_chain(graph, &parent, &seeds, id),
         }
     };
 
@@ -197,6 +228,32 @@ fn compute_impact(graph: &SymbolGraph, seeds: HashSet<NodeId>) -> ImpactReport {
         tests,
         affected_tests: affected_tests.into_values().collect(),
     }
+}
+
+/// Walks `parent` back from `id` toward the seed that reached it, collecting each
+/// intermediate node's qualified path (nearest-seed first), stopping once the walk
+/// reaches a seed without including the seed itself. For a DIRECT entry (`parent[id]` is
+/// already a seed) this returns empty, matching `Dependent::via`'s documented behavior.
+fn via_chain(
+    graph: &SymbolGraph,
+    parent: &HashMap<NodeId, NodeId>,
+    seeds: &HashSet<NodeId>,
+    id: &NodeId,
+) -> Vec<String> {
+    let mut chain = Vec::new();
+    let mut current = id.clone();
+    while let Some(p) = parent.get(&current) {
+        if seeds.contains(p) {
+            break;
+        }
+        chain.push(p.clone());
+        current = p.clone();
+    }
+    chain.reverse();
+    chain
+        .into_iter()
+        .filter_map(|id| graph.node(&id).map(|n| n.qualified_path.clone()))
+        .collect()
 }
 
 /// File-mode query: the blast radius of every symbol declared in `file`.

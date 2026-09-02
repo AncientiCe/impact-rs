@@ -137,7 +137,8 @@ fn tool_list() -> Value {
                     "project_path": {"type": "string", "description": "Project root the cache was built against (defaults to the current directory)"},
                     "cache_dir": {"type": "string", "description": "Where the index cache lives (defaults to <project_path>/.impact)"},
                     "workspace_path": {"type": "string", "description": "Path to a workspace.toml registering sibling projects, to also compute cross-project impact"},
-                    "min_confidence": {"type": "string", "enum": ["exact", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything)"}
+                    "min_confidence": {"type": "string", "enum": ["exact", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything)"},
+                    "explain": {"type": "boolean", "description": "Include each INDIRECT entry's chain back to its nearest DIRECT dependent (default: false)"}
                 },
                 "required": ["path"]
             }
@@ -152,7 +153,8 @@ fn tool_list() -> Value {
                     "project_path": {"type": "string", "description": "Project root the cache was built against (defaults to the current directory)"},
                     "cache_dir": {"type": "string", "description": "Where the index cache lives (defaults to <project_path>/.impact)"},
                     "workspace_path": {"type": "string", "description": "Path to a workspace.toml registering sibling projects, to also compute cross-project impact"},
-                    "min_confidence": {"type": "string", "enum": ["exact", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything)"}
+                    "min_confidence": {"type": "string", "enum": ["exact", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything)"},
+                    "explain": {"type": "boolean", "description": "Include each INDIRECT entry's chain back to its nearest DIRECT dependent (default: false)"}
                 },
                 "required": ["description"]
             }
@@ -167,7 +169,8 @@ fn tool_list() -> Value {
                     "project_path": {"type": "string", "description": "Project root the cache was built against (defaults to the current directory)"},
                     "cache_dir": {"type": "string", "description": "Where the index cache lives (defaults to <project_path>/.impact)"},
                     "workspace_path": {"type": "string", "description": "Path to a workspace.toml registering sibling projects, to also compute cross-project impact"},
-                    "min_confidence": {"type": "string", "enum": ["exact", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything)"}
+                    "min_confidence": {"type": "string", "enum": ["exact", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything)"},
+                    "explain": {"type": "boolean", "description": "Include each INDIRECT entry's chain back to its nearest DIRECT dependent (default: false)"}
                 },
                 "required": ["diff"]
             }
@@ -216,6 +219,12 @@ fn apply_min_confidence(
     }
 }
 
+fn explain_arg(args: &Value) -> bool {
+    args.get("explain")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 fn ok_or_error<T: serde::Serialize>(result: anyhow::Result<T>) -> Value {
     match result {
         Ok(value) => {
@@ -250,9 +259,11 @@ fn tool_file(args: &Value) -> Value {
         Ok(v) => v,
         Err(e) => return json!({"error": e}),
     };
+    let explain = explain_arg(args);
 
     let result = ops::query_file(&path, project_path.as_deref(), cache_dir.as_deref())
         .map(|local| apply_min_confidence(local, min_confidence))
+        .map(|local| impact_core::apply_explain(local, explain))
         .and_then(|local| {
             with_workspace(local, project_path.as_deref(), workspace_path.as_deref())
         });
@@ -270,9 +281,11 @@ fn tool_change(args: &Value) -> Value {
         Ok(v) => v,
         Err(e) => return json!({"error": e}),
     };
+    let explain = explain_arg(args);
 
     let result = ops::apply_change(&description, project_path.as_deref(), cache_dir.as_deref())
         .map(|local| apply_min_confidence(local, min_confidence))
+        .map(|local| impact_core::apply_explain(local, explain))
         .and_then(|local| {
             with_workspace(local, project_path.as_deref(), workspace_path.as_deref())
         });
@@ -290,9 +303,11 @@ fn tool_diff(args: &Value) -> Value {
         Ok(v) => v,
         Err(e) => return json!({"error": e}),
     };
+    let explain = explain_arg(args);
 
     let result = ops::diff_impact(&diff, project_path.as_deref(), cache_dir.as_deref())
         .map(|local| apply_min_confidence(local, min_confidence))
+        .map(|local| impact_core::apply_explain(local, explain))
         .and_then(|local| {
             with_workspace(local, project_path.as_deref(), workspace_path.as_deref())
         });
