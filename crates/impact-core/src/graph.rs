@@ -45,6 +45,10 @@ pub struct Node {
     pub qualified_path: String,
     pub file: String,
     pub line: usize,
+    /// 1-indexed, inclusive last line of this symbol's own span — see
+    /// `SymbolDecl::end_line`. `0` for a `Contract` node the indexer synthesizes (no real
+    /// declaration site of its own), matching `line`'s existing `0` for that case.
+    pub end_line: usize,
     pub language: String,
     /// Whether this `Function` node is a test (`#[test]`, `#[tokio::test]`, ...). Always
     /// `false` for non-function kinds. Drives the TESTS section of a blast-radius report.

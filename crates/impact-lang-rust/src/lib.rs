@@ -145,6 +145,7 @@ fn push(
         kind,
         qualified_path: join_path(prefix, name),
         line: node.start_position().row + 1,
+        end_line: node.end_position().row + 1,
         is_test,
     });
 }
@@ -158,6 +159,7 @@ fn push_contract(out: &mut Vec<SymbolDecl>, kind: ContractKind, name: &str, node
         kind: NodeKind::Contract(kind),
         qualified_path: name.to_string(),
         line: node.start_position().row + 1,
+        end_line: node.end_position().row + 1,
         is_test: false,
     });
 }

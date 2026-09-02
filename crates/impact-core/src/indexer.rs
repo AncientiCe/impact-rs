@@ -78,6 +78,7 @@ impl<'a> Indexer<'a> {
                     qualified_path: decl.qualified_path,
                     file: rel_str.clone(),
                     line: decl.line,
+                    end_line: decl.end_line,
                     language: adapter.language_id().to_string(),
                     is_test: decl.is_test,
                 })
@@ -131,6 +132,7 @@ impl<'a> Indexer<'a> {
                 qualified_path: cr.contract_id.clone(),
                 file: String::new(),
                 line: 0,
+                end_line: 0,
                 language: String::new(),
                 is_test: false,
             };

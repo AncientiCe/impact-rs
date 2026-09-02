@@ -197,32 +197,29 @@ pub fn compute_change_impact(graph: &SymbolGraph, spec: &ChangeSpec) -> Option<I
 }
 
 /// Diff-mode query: the blast radius of every symbol a diff's touched lines fall inside,
-/// across every file the diff mentions. There's no end-line span recorded for a symbol
-/// (only its declaration line — see `SymbolDecl`), so "which symbol contains line N" is
-/// resolved as the nearest declaration at or before N in the same file, not a precise AST
-/// containment check — the same kind of structural approximation `impact` makes
-/// everywhere else, not a claim of perfect precision. A touched range whose declaration
-/// line itself falls inside it (a new function, or one whose signature changed) is always
-/// caught directly; a range entirely inside an existing symbol's body is caught by the
-/// nearest-preceding-declaration fallback.
+/// across every file the diff mentions. Each symbol's own `[line, end_line]` span (see
+/// `SymbolDecl::end_line`) is matched against the diff's touched ranges by overlap —
+/// still a structural approximation, not precise AST containment (a symbol's span is its
+/// outermost declaration node, e.g. a whole `impl` block or `fn`, not per-statement), but
+/// no longer the coarser "nearest preceding declaration" guess: a touched range entirely
+/// inside a function's body is now matched directly by its span, not inferred from
+/// declaration order.
 pub fn compute_diff_impact(graph: &SymbolGraph, touches: &DiffTouches) -> ImpactReport {
     let mut seeds: HashSet<NodeId> = HashSet::new();
 
     for (file, ranges) in &touches.files {
-        let mut candidates: Vec<&Node> = graph
+        let candidates: Vec<&Node> = graph
             .nodes()
             .filter(|n| &n.file == file && !matches!(n.kind, NodeKind::Module))
             .collect();
-        candidates.sort_by_key(|n| n.line);
 
         for range in ranges {
             for candidate in &candidates {
-                if range.contains(&candidate.line) {
+                let span_end = candidate.end_line.max(candidate.line);
+                let overlaps = candidate.line < range.end && range.start <= span_end;
+                if overlaps {
                     seeds.insert(candidate.id.clone());
                 }
-            }
-            if let Some(preceding) = candidates.iter().rev().find(|n| n.line <= range.start) {
-                seeds.insert(preceding.id.clone());
             }
         }
     }

@@ -42,10 +42,8 @@ fn diff_via_stdin(cache_dir: &Path, diff_text: &str) -> Value {
 }
 
 /// A single-line hunk touching only the *body* of `PaymentService::charge` (line 5 —
-/// `true`/`false`, not `charge`'s own declaration line 4) — this only resolves to a seed
-/// via `compute_diff_impact`'s nearest-preceding-declaration fallback, not the "range
-/// contains the declaration line" direct case, so it's the case that actually exercises
-/// the fallback path.
+/// `true`/`false`, not `charge`'s own declaration line 4) — resolves to a seed via
+/// `charge`'s full `[line, end_line]` span (lines 4-6), not just its declaration line.
 const CHARGE_BODY_DIFF: &str = "diff --git a/src/payment/service.rs b/src/payment/service.rs\n\
 --- a/src/payment/service.rs\n\
 +++ b/src/payment/service.rs\n\
@@ -90,6 +88,30 @@ fn diff_touching_a_leaf_file_has_no_impact() {
  \n\
 -pub struct OrderService {\n\
 +pub struct OrderServiceX {\n";
+
+    let report = diff_via_stdin(cache_dir.path(), diff);
+
+    assert_eq!(report["direct"], serde_json::json!([]));
+    assert_eq!(report["indirect"], serde_json::json!([]));
+}
+
+/// `service.rs` line 7 is the closing `}` of the `impl PaymentService` block, past
+/// `charge`'s own span (lines 4-6) and past `PaymentService`'s single-line span (line 1)
+/// — the `impl` block itself isn't indexed as a symbol. A touched line there should
+/// resolve to nothing, proving `compute_diff_impact` now matches a symbol's real
+/// `[line, end_line]` span rather than falling back to "nearest preceding declaration",
+/// which would have wrongly attributed this line to `charge`.
+#[test]
+fn diff_touching_a_line_outside_every_symbols_span_has_no_impact() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    index(cache_dir.path());
+
+    let diff = "diff --git a/src/payment/service.rs b/src/payment/service.rs\n\
+--- a/src/payment/service.rs\n\
++++ b/src/payment/service.rs\n\
+@@ -7 +7 @@\n\
+-}\n\
++} \n";
 
     let report = diff_via_stdin(cache_dir.path(), diff);
 

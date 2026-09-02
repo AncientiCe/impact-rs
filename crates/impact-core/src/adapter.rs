@@ -20,6 +20,11 @@ pub struct SymbolDecl {
     pub kind: NodeKind,
     pub qualified_path: String,
     pub line: usize,
+    /// The last line of this symbol's own span (1-indexed, inclusive) — its closing
+    /// brace/`end` for a block-bodied declaration, or the same as `line` for a
+    /// single-line one. Lets `compute_diff_impact` map a touched line to the symbol that
+    /// actually contains it instead of only the nearest preceding declaration.
+    pub end_line: usize,
     pub is_test: bool,
 }
 

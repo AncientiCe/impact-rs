@@ -11,7 +11,7 @@ use crate::graph::{ContractKind, Edge, EdgeKind, Node, SymbolGraph};
 /// `migrate` compares this against the database's own `PRAGMA user_version` and wipes
 /// every table before recreating them on a mismatch — simpler and safer than writing a
 /// column-by-column migration for a local, fully-rebuildable index cache.
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 /// Per-project SQLite-backed cache of the last-indexed graph, keyed by file content hash
 /// so unchanged files can skip re-parsing on the next index run.
@@ -73,6 +73,7 @@ impl Cache {
                 qualified_path TEXT NOT NULL,
                 file TEXT NOT NULL,
                 line INTEGER NOT NULL,
+                end_line INTEGER NOT NULL DEFAULT 0,
                 language TEXT NOT NULL,
                 is_test INTEGER NOT NULL DEFAULT 0
             );
@@ -151,14 +152,15 @@ impl Cache {
         for node in nodes {
             let kind_json = serde_json::to_string(&node.kind)?;
             tx.execute(
-                "INSERT OR REPLACE INTO nodes (id, kind, qualified_path, file, line, language, is_test)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT OR REPLACE INTO nodes (id, kind, qualified_path, file, line, end_line, language, is_test)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     node.id.0,
                     kind_json,
                     node.qualified_path,
                     node.file,
                     node.line as i64,
+                    node.end_line as i64,
                     node.language,
                     node.is_test as i64,
                 ],
@@ -255,14 +257,15 @@ impl Cache {
         for node in nodes {
             let kind_json = serde_json::to_string(&node.kind)?;
             tx.execute(
-                "INSERT OR REPLACE INTO nodes (id, kind, qualified_path, file, line, language, is_test)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT OR REPLACE INTO nodes (id, kind, qualified_path, file, line, end_line, language, is_test)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     node.id.0,
                     kind_json,
                     node.qualified_path,
                     node.file,
                     node.line as i64,
+                    node.end_line as i64,
                     node.language,
                     node.is_test as i64,
                 ],
@@ -296,21 +299,31 @@ impl Cache {
     pub fn load_graph(&self) -> Result<SymbolGraph> {
         let mut graph = SymbolGraph::new();
 
-        let mut node_stmt = self
-            .conn
-            .prepare("SELECT id, kind, qualified_path, file, line, language, is_test FROM nodes")?;
+        let mut node_stmt = self.conn.prepare(
+            "SELECT id, kind, qualified_path, file, line, end_line, language, is_test FROM nodes",
+        )?;
         let node_rows = node_stmt.query_map([], |row| {
             let id: String = row.get(0)?;
             let kind_json: String = row.get(1)?;
             let qualified_path: String = row.get(2)?;
             let file: String = row.get(3)?;
             let line: i64 = row.get(4)?;
-            let language: String = row.get(5)?;
-            let is_test: i64 = row.get(6)?;
-            Ok((id, kind_json, qualified_path, file, line, language, is_test))
+            let end_line: i64 = row.get(5)?;
+            let language: String = row.get(6)?;
+            let is_test: i64 = row.get(7)?;
+            Ok((
+                id,
+                kind_json,
+                qualified_path,
+                file,
+                line,
+                end_line,
+                language,
+                is_test,
+            ))
         })?;
         for row in node_rows {
-            let (id, kind_json, qualified_path, file, line, language, is_test) = row?;
+            let (id, kind_json, qualified_path, file, line, end_line, language, is_test) = row?;
             let kind = serde_json::from_str(&kind_json)?;
             graph.insert_node(Node {
                 id: crate::graph::NodeId(id),
@@ -318,6 +331,7 @@ impl Cache {
                 qualified_path,
                 file,
                 line: line as usize,
+                end_line: end_line as usize,
                 language,
                 is_test: is_test != 0,
             });
