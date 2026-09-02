@@ -37,8 +37,8 @@ pub fn index_project(
 
     let config = DetectorConfig::load(&project_root)?;
     let rust_adapter = RustAdapter::new(config.clone());
-    let ts_adapter = TsAdapter;
-    let python_adapter = PythonAdapter;
+    let ts_adapter = TsAdapter::new(config.clone());
+    let python_adapter = PythonAdapter::new(config.clone());
     let go_adapter = GoAdapter::new(config);
     let kotlin_adapter = KotlinAdapter;
     let swift_adapter = SwiftAdapter;

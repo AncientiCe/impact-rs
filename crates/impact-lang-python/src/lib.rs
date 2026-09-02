@@ -13,18 +13,46 @@
 //! ambiguity that made TypeScript skip this) — cheap, unambiguous, and matches both
 //! plain pytest functions and `unittest.TestCase` methods (which follow the same
 //! `test`-prefix convention).
+//!
+//! Also detects one API contract shape (gated on `impact.toml`'s `api_frameworks`
+//! containing `"fastapi"` and/or `"flask"`, both on by default): a route decorator
+//! directly above a `def`, e.g. `@app.get("/payments")` (FastAPI, and Flask 2.0+'s
+//! verb-method aliases) or `@app.route("/payments", methods=["POST"])` (Flask's
+//! original form — verb read from the first string in `methods=[...]`, defaulting to
+//! `GET` when the keyword is absent, matching Flask's own default). Confirmed via a real
+//! parse-tree dump before writing this: a decorator's argument list holds positional
+//! `string` nodes and `keyword_argument` nodes side by side, same shape either form
+//! needs to read. The decorated function *is* the handler — unlike axum/net/http's
+//! `.route(path, verb(handler))` call, there's no separate handler argument to extract,
+//! so `symbol_name` is just the decorated function's own qualified path.
 
 use std::path::Path;
 
-use impact_core::{ContractRef, EdgeKind, FileAst, LanguageAdapter, NodeKind, RefDecl, SymbolDecl};
+use impact_core::{
+    ContractKind, ContractRef, ContractRole, DetectorConfig, EdgeKind, FileAst, LanguageAdapter,
+    NodeKind, RefDecl, SymbolDecl,
+};
 use tree_sitter::Node;
 
-#[derive(Default)]
-pub struct PythonAdapter;
+const HTTP_VERBS: &[&str] = &["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
+
+pub struct PythonAdapter {
+    config: DetectorConfig,
+}
 
 impl PythonAdapter {
+    pub fn new(config: DetectorConfig) -> Self {
+        Self { config }
+    }
+
     fn language() -> tree_sitter::Language {
         tree_sitter_python::LANGUAGE.into()
+    }
+}
+
+impl Default for PythonAdapter {
+    fn default() -> Self {
+        Self::new(DetectorConfig::default())
     }
 }
 
@@ -75,8 +103,17 @@ impl LanguageAdapter for PythonAdapter {
         out
     }
 
-    fn extract_contract_refs(&self, _ast: &FileAst) -> Vec<ContractRef> {
-        Vec::new()
+    fn extract_contract_refs(&self, ast: &FileAst) -> Vec<ContractRef> {
+        let prefix = module_prefix(&ast.path);
+        let mut out = Vec::new();
+        collect_contracts(
+            ast.tree.root_node(),
+            ast.source.as_bytes(),
+            &prefix,
+            &self.config,
+            &mut out,
+        );
+        out
     }
 }
 
@@ -239,6 +276,146 @@ fn collect_refs(
             _ => {
                 collect_refs(child, source, prefix, current_fn, out);
             }
+        }
+    }
+}
+
+fn find_child_of_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+    let mut cursor = node.walk();
+    let found = node.children(&mut cursor).find(|c| c.kind() == kind);
+    found
+}
+
+/// Strips the surrounding quotes from a Python `string` node's raw source text. Doesn't
+/// handle f-strings, concatenation, or escape sequences — a dynamic or composed path
+/// can't be resolved structurally anyway, so this only ever needs to read a plain literal.
+fn python_string_text(node: Node, source: &[u8]) -> Option<String> {
+    if node.kind() != "string" {
+        return None;
+    }
+    let text = node.utf8_text(source).ok()?;
+    Some(text.trim_matches(|c| c == '"' || c == '\'').to_string())
+}
+
+/// The first positional (non-keyword) argument, if it's a plain string literal — the
+/// route path in every recognized decorator shape. Positional arguments always precede
+/// keyword ones in Python call syntax, so the first named child that isn't a
+/// `keyword_argument` is either the path or, if it's not a `string`, an expression this
+/// adapter can't resolve structurally (never guessed at).
+fn first_positional_string(arguments: Node, source: &[u8]) -> Option<String> {
+    let mut cursor = arguments.walk();
+    for child in arguments.named_children(&mut cursor) {
+        if child.kind() == "keyword_argument" {
+            continue;
+        }
+        return python_string_text(child, source);
+    }
+    None
+}
+
+/// Flask's `methods=[...]` keyword argument on `@app.route(...)`, if present: the first
+/// string in the list. Flask accepts multiple methods per route; this adapter only
+/// surfaces the first, matching every other adapter's "one clear case, not exhaustive
+/// coverage" scope for a feature that's rare in practice (most routes list one method).
+fn flask_methods_keyword(arguments: Node, source: &[u8]) -> Option<String> {
+    let mut cursor = arguments.walk();
+    let keyword = arguments.named_children(&mut cursor).find(|c| {
+        c.kind() == "keyword_argument" && field_text(*c, "name", source) == Some("methods")
+    })?;
+    let value = keyword.child_by_field_name("value")?;
+    if value.kind() != "list" {
+        return None;
+    }
+    let first_string = find_child_of_kind(value, "string")?;
+    python_string_text(first_string, source)
+}
+
+/// A FastAPI/Flask route decorator, if `decorator` is one: `@app.get(path)`-style verb
+/// aliases (both frameworks), or Flask's `@app.route(path, methods=[...])`. Returns the
+/// HTTP verb (uppercased) and path.
+fn python_route_decorator(
+    decorator: Node,
+    source: &[u8],
+    config: &DetectorConfig,
+) -> Option<(String, String)> {
+    let call = find_child_of_kind(decorator, "call")?;
+    let function = call.child_by_field_name("function")?;
+    if function.kind() != "attribute" {
+        return None;
+    }
+    let method_name = field_text(function, "attribute", source)?;
+    let arguments = call.child_by_field_name("arguments")?;
+    let path = first_positional_string(arguments, source)?;
+
+    if method_name == "route" {
+        if !config.api_frameworks.iter().any(|f| f == "flask") {
+            return None;
+        }
+        let verb = flask_methods_keyword(arguments, source).unwrap_or_else(|| "GET".to_string());
+        return Some((verb, path));
+    }
+
+    let verb = method_name.to_uppercase();
+    if !HTTP_VERBS.contains(&verb.as_str()) {
+        return None;
+    }
+    if !config
+        .api_frameworks
+        .iter()
+        .any(|f| f == "fastapi" || f == "flask")
+    {
+        return None;
+    }
+    Some((verb, path))
+}
+
+/// Walks the same declaration shapes as `walk`, looking for a route decorator directly
+/// above a `def` (see the module doc). Doesn't descend into function bodies — a route
+/// registration always decorates a top-level or class-body function, matching every
+/// other adapter's contract-detection scope.
+fn collect_contracts(
+    node: Node,
+    source: &[u8],
+    prefix: &str,
+    config: &DetectorConfig,
+    out: &mut Vec<ContractRef>,
+) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "decorated_definition" => {
+                if let Some(func_def) = find_child_of_kind(child, "function_definition") {
+                    if let Some(name) = field_text(func_def, "name", source) {
+                        let qualified = join_path(prefix, name);
+                        let mut dec_cursor = child.walk();
+                        for decorator in child
+                            .children(&mut dec_cursor)
+                            .filter(|c| c.kind() == "decorator")
+                        {
+                            if let Some((verb, path)) =
+                                python_route_decorator(decorator, source, config)
+                            {
+                                out.push(ContractRef {
+                                    contract_kind: ContractKind::ApiRoute,
+                                    contract_id: format!("{verb} {path}"),
+                                    symbol_name: qualified.clone(),
+                                    role: ContractRole::Produces,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            "class_definition" => {
+                if let (Some(name), Some(body)) = (
+                    field_text(child, "name", source),
+                    child.child_by_field_name("body"),
+                ) {
+                    let new_prefix = join_path(prefix, name);
+                    collect_contracts(body, source, &new_prefix, config, out);
+                }
+            }
+            _ => {}
         }
     }
 }

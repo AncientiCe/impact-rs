@@ -21,21 +21,39 @@
 //!
 //! Deliberately scoped down relative to `impact-lang-rust`: functions, classes, and
 //! methods (`extract_symbols`), and calls including simple method calls
-//! (`extract_references`). No contract detection (`extract_contract_refs` always returns
-//! empty — this adapter doesn't claim to recognize any TS API/event/database framework,
-//! which is an honest empty result, not a stub pretending to work) and no test-attribute
-//! detection (JS/TS test conventions — Jest, Vitest, Mocha — vary enough that guessing
-//! wrong would be worse than always reporting `is_test: false`).
+//! (`extract_references`). No test-attribute detection (JS/TS test conventions — Jest,
+//! Vitest, Mocha — vary enough that guessing wrong would be worse than always reporting
+//! `is_test: false`).
+//!
+//! Also detects one API contract shape (gated on `impact.toml`'s `api_frameworks`
+//! containing `"express"` and/or `"fastify"`, both on by default): an
+//! `app.get(path, handler)`-style route registration call — Express's own method-chaining
+//! API and Fastify's shortcut methods share the exact same call shape (`app`/`fastify`/
+//! `router`, any receiver name; `.get`/`.post`/`.put`/`.delete`/`.patch`; a string path
+//! then a handler reference), confirmed via a real parse-tree dump before writing this.
+//! Only a plain named-function or `object.method` handler reference is recognized — an
+//! inline arrow/function-expression handler has no name to report, so no route is
+//! emitted for it rather than guessing at one of its inner identifiers.
 
 use std::path::Path;
 
-use impact_core::{ContractRef, EdgeKind, FileAst, LanguageAdapter, NodeKind, RefDecl, SymbolDecl};
+use impact_core::{
+    ContractKind, ContractRef, ContractRole, DetectorConfig, EdgeKind, FileAst, LanguageAdapter,
+    NodeKind, RefDecl, SymbolDecl,
+};
 use tree_sitter::Node;
 
-#[derive(Default)]
-pub struct TsAdapter;
+const HTTP_VERBS: &[&str] = &["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
+
+pub struct TsAdapter {
+    config: DetectorConfig,
+}
 
 impl TsAdapter {
+    pub fn new(config: DetectorConfig) -> Self {
+        Self { config }
+    }
+
     /// `.ts` gets the plain TypeScript grammar (see the module doc for why); every other
     /// extension this adapter claims (`.tsx`/`.jsx`/`.js`/`.mjs`) gets the TSX grammar,
     /// which is a strict enough superset to parse plain JS/JSX cleanly too.
@@ -45,6 +63,12 @@ impl TsAdapter {
         } else {
             tree_sitter_typescript::LANGUAGE_TSX.into()
         }
+    }
+}
+
+impl Default for TsAdapter {
+    fn default() -> Self {
+        Self::new(DetectorConfig::default())
     }
 }
 
@@ -95,8 +119,15 @@ impl LanguageAdapter for TsAdapter {
         out
     }
 
-    fn extract_contract_refs(&self, _ast: &FileAst) -> Vec<ContractRef> {
-        Vec::new()
+    fn extract_contract_refs(&self, ast: &FileAst) -> Vec<ContractRef> {
+        let mut out = Vec::new();
+        collect_contracts(
+            ast.tree.root_node(),
+            ast.source.as_bytes(),
+            &self.config,
+            &mut out,
+        );
+        out
     }
 }
 
@@ -247,5 +278,77 @@ fn collect_refs(
                 collect_refs(child, source, prefix, current_fn, out);
             }
         }
+    }
+}
+
+/// Strips the surrounding quotes from a `string` node's raw source text. Doesn't handle
+/// template literals or escape sequences — a dynamic or composed path can't be resolved
+/// structurally anyway, so this only ever needs to read a plain literal.
+fn ts_string_text(node: Node, source: &[u8]) -> Option<String> {
+    if node.kind() != "string" {
+        return None;
+    }
+    let text = node.utf8_text(source).ok()?;
+    Some(
+        text.trim_matches(|c| c == '"' || c == '\'' || c == '`')
+            .to_string(),
+    )
+}
+
+/// An `app.get(path, handler)`-style Express/Fastify route registration, if `call` is
+/// one — see the module doc for why both frameworks share this detector. `handler` is
+/// only recognized as a plain identifier or `object.method` reference; an inline
+/// function/arrow-function handler yields `None` rather than guessing at a name.
+fn express_route_call(call: Node, source: &[u8]) -> Option<(String, String, String)> {
+    let function = call.child_by_field_name("function")?;
+    if function.kind() != "member_expression" {
+        return None;
+    }
+    let verb = field_text(function, "property", source)?.to_uppercase();
+    if !HTTP_VERBS.contains(&verb.as_str()) {
+        return None;
+    }
+    let arguments = call.child_by_field_name("arguments")?;
+    let path_arg = arguments.named_child(0)?;
+    let path = ts_string_text(path_arg, source)?;
+
+    let handler_arg = arguments.named_child(1)?;
+    if !matches!(handler_arg.kind(), "identifier" | "member_expression") {
+        return None;
+    }
+    let handler = last_identifier_text(handler_arg, source)?.to_string();
+
+    Some((verb, path, handler))
+}
+
+/// Walks the whole file looking for Express/Fastify route registrations. Unlike
+/// `collect_refs`, this doesn't need to track an enclosing function or prefix: a route's
+/// `symbol_name` is the handler being registered, not whichever function happens to make
+/// the registration call, so a plain recursive walk is enough — matching
+/// `impact-lang-go`'s `net/http` detector, which has the same shape of independence.
+fn collect_contracts(
+    node: Node,
+    source: &[u8],
+    config: &DetectorConfig,
+    out: &mut Vec<ContractRef>,
+) {
+    if node.kind() == "call_expression"
+        && config
+            .api_frameworks
+            .iter()
+            .any(|f| f == "express" || f == "fastify")
+    {
+        if let Some((verb, path, handler)) = express_route_call(node, source) {
+            out.push(ContractRef {
+                contract_kind: ContractKind::ApiRoute,
+                contract_id: format!("{verb} {path}"),
+                symbol_name: handler,
+                role: ContractRole::Produces,
+            });
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_contracts(child, source, config, out);
     }
 }
