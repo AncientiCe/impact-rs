@@ -21,9 +21,11 @@
 //!
 //! Deliberately scoped down relative to `impact-lang-rust`: functions, classes, and
 //! methods (`extract_symbols`), and calls including simple method calls
-//! (`extract_references`). No test-attribute detection (JS/TS test conventions — Jest,
-//! Vitest, Mocha — vary enough that guessing wrong would be worse than always reporting
-//! `is_test: false`).
+//! (`extract_references`). Detects tests by file-naming convention only (`is_test_file`)
+//! — every JS/TS test framework's own *call*-based marker (`test()`/`it()`, `describe`
+//! blocks) varies enough between Jest/Vitest/Mocha that guessing at one would be worse
+//! than not detecting it, but `*.test.*`/`*.spec.*`/`__tests__/` is a naming convention
+//! all three frameworks (and their default test-runner configs) actually share.
 //!
 //! Also detects one API contract shape (gated on `impact.toml`'s `api_frameworks`
 //! containing `"express"` and/or `"fastify"`, both on by default): an
@@ -96,11 +98,13 @@ impl LanguageAdapter for TsAdapter {
 
     fn extract_symbols(&self, ast: &FileAst) -> Vec<SymbolDecl> {
         let prefix = module_prefix(&ast.path);
+        let is_test_file = is_test_file(&ast.path);
         let mut out = Vec::new();
         walk(
             ast.tree.root_node(),
             ast.source.as_bytes(),
             &prefix,
+            is_test_file,
             &mut out,
         );
         out
@@ -159,47 +163,74 @@ fn field_text<'a>(node: Node, field: &str, source: &'a [u8]) -> Option<&'a str> 
     node.child_by_field_name(field)?.utf8_text(source).ok()
 }
 
-fn push(out: &mut Vec<SymbolDecl>, kind: NodeKind, prefix: &str, name: &str, node: Node) {
+/// Whether every function/method declared in this file should be marked a test, by the
+/// file-naming convention Jest, Vitest, and Mocha all share (unlike a call-based
+/// convention like `test()`/`it()`, which varies enough between those frameworks that
+/// this adapter otherwise avoids test detection entirely — see the module doc): the
+/// filename itself contains a `.test.` or `.spec.` segment (`foo.test.ts`,
+/// `foo.spec.tsx`), or the file lives under a `__tests__/` directory. A `test()` call
+/// inside an otherwise-ordinarily-named file is deliberately not detected — that would
+/// need call-site analysis this adapter doesn't do, not a path check.
+fn is_test_file(rel_path: &str) -> bool {
+    let path = rel_path.replace('\\', "/");
+    if path.split('/').any(|segment| segment == "__tests__") {
+        return true;
+    }
+    let Some(filename) = path.rsplit('/').next() else {
+        return false;
+    };
+    filename.contains(".test.") || filename.contains(".spec.")
+}
+
+fn push(
+    out: &mut Vec<SymbolDecl>,
+    kind: NodeKind,
+    prefix: &str,
+    name: &str,
+    node: Node,
+    is_test: bool,
+) {
     out.push(SymbolDecl {
         kind,
         qualified_path: join_path(prefix, name),
         line: node.start_position().row + 1,
         end_line: node.end_position().row + 1,
-        is_test: false,
+        is_test,
     });
 }
 
 /// Walks top-level declarations (transparently unwrapping `export`/`export default`) and
 /// class bodies, extracting one `SymbolDecl` per function, class, and method. Doesn't
 /// descend into function bodies — nested declarations are out of scope, matching
-/// `impact-lang-rust`'s `walk`.
-fn walk(node: Node, source: &[u8], prefix: &str, out: &mut Vec<SymbolDecl>) {
+/// `impact-lang-rust`'s `walk`. `is_test_file` marks every function/method `is_test`
+/// (never a class itself) — see `is_test_file`'s own doc for the convention.
+fn walk(node: Node, source: &[u8], prefix: &str, is_test_file: bool, out: &mut Vec<SymbolDecl>) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
             "function_declaration" => {
                 if let Some(name) = field_text(child, "name", source) {
-                    push(out, NodeKind::Function, prefix, name, child);
+                    push(out, NodeKind::Function, prefix, name, child, is_test_file);
                 }
             }
             "class_declaration" => {
                 if let Some(name) = field_text(child, "name", source) {
-                    push(out, NodeKind::Type, prefix, name, child);
+                    push(out, NodeKind::Type, prefix, name, child, false);
                     if let Some(body) = child.child_by_field_name("body") {
                         let new_prefix = join_path(prefix, name);
-                        walk(body, source, &new_prefix, out);
+                        walk(body, source, &new_prefix, is_test_file, out);
                     }
                 }
             }
             "method_definition" => {
                 if let Some(name) = field_text(child, "name", source) {
-                    push(out, NodeKind::Function, prefix, name, child);
+                    push(out, NodeKind::Function, prefix, name, child, is_test_file);
                 }
             }
             "export_statement" => {
                 // `export function foo() {}` / `export class X {}` wrap the real
                 // declaration one level down — unwrap transparently, same prefix.
-                walk(child, source, prefix, out);
+                walk(child, source, prefix, is_test_file, out);
             }
             _ => {}
         }
