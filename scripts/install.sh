@@ -23,10 +23,6 @@ detect_target() {
     arm64|aarch64) arch_part="aarch64" ;;
     *) echo "Unsupported architecture: $arch" >&2; exit 1 ;;
   esac
-  if [ "$os_part" = "unknown-linux-gnu" ] && [ "$arch_part" = "aarch64" ]; then
-    echo "Linux ARM64 release binaries are not shipped yet; build from source with cargo install --path crates/impact-cli for now." >&2
-    exit 1
-  fi
   printf '%s-%s' "$arch_part" "$os_part"
 }
 
