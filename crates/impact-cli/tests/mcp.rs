@@ -87,6 +87,30 @@ fn initialize_and_tools_list_describe_the_server() {
     );
 }
 
+/// The server's `initialize` instructions must tell agents to run impact analysis not
+/// just before editing but also when proposing a fix concrete enough to state in
+/// `impact_change`'s grammar (rename/remove/signature change), before any code is
+/// written — see the impact_rs `todo` Palace memory recorded 2026-09-03.
+#[test]
+fn initialize_instructions_cover_proposing_a_concrete_fix() {
+    let responses = mcp_round_trip(&[serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2024-11-05"}
+    })]);
+
+    let instructions = responses[0]["result"]["instructions"]
+        .as_str()
+        .expect("initialize result should have instructions");
+    assert!(
+        instructions.contains("propos"),
+        "instructions should mention proposing a fix: {instructions}"
+    );
+    assert!(
+        instructions.contains("vague") || instructions.contains("exploratory"),
+        "instructions should still exclude vague/exploratory discussion: {instructions}"
+    );
+}
+
 /// An unrecognized JSON-RPC method is a proper JSON-RPC error, not a crash or a silently
 /// dropped request.
 #[test]

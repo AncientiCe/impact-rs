@@ -62,8 +62,13 @@ fn initialize_result(protocol_version: &str) -> Value {
         "instructions": "Before modifying code, call impact_index once per project, then \
             impact_file, impact_change, or impact_diff (given a unified diff) to see what \
             depends on what you're about to change — direct/indirect callers, API routes, \
-            event types, database tables, and affected tests. Re-run impact_index after \
-            the project changes; results are only as fresh as the last index.",
+            event types, database tables, and affected tests. This also applies before \
+            proposing a fix: once the proposed fix is concrete enough to state as a \
+            rename/remove/signature-change target, run impact analysis before presenting \
+            the proposal, even if no code has been written yet — vague, exploratory \
+            discussion that hasn't settled on a concrete target doesn't need it. Re-run \
+            impact_index after the project changes; results are only as fresh as the \
+            last index.",
     })
 }
 

@@ -104,6 +104,27 @@ fn install_writes_cursor_mcp_entry_and_rule_file() {
     assert!(rule.contains("impact_change"));
 }
 
+/// The installed rule must widen the "before editing" trigger to also cover proposing a
+/// concrete fix (a rename/remove/signature-change target stated before any code is
+/// written) while still excluding vague, exploratory discussion that hasn't settled on a
+/// concrete target — see the impact_rs `todo` Palace memory recorded 2026-09-03.
+#[test]
+fn installed_rule_covers_proposing_a_concrete_fix() {
+    let home = tempfile::tempdir().unwrap();
+
+    install(home.path(), &[]);
+
+    let rule = fs::read_to_string(rule_path(home.path())).unwrap();
+    assert!(
+        rule.contains("propos"),
+        "rule should mention proposing a fix: {rule}"
+    );
+    assert!(
+        rule.contains("vague") || rule.contains("exploratory"),
+        "rule should still exclude vague/exploratory discussion: {rule}"
+    );
+}
+
 #[test]
 fn install_merges_into_existing_cursor_config_without_clobbering() {
     let home = tempfile::tempdir().unwrap();

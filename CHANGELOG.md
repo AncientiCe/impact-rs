@@ -4,6 +4,10 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- The installed agent rule (`CLAUDE.md`/`AGENTS.md`/Cursor's `impact.mdc`) and the MCP server's `initialize` `instructions` now widen the "before editing" trigger to also cover *proposing* a fix: once a proposed fix is concrete enough to state as a rename/remove/signature-change target, agents are told to run impact analysis before presenting the proposal, even if no code has been written yet. Vague, exploratory "here's roughly how I'd approach it" discussion still doesn't need it. Previously the trigger only fired once an edit had actually started, which could leave a concrete proposal evaluated without blast-radius info. 2 new behavior tests (`crates/impact-cli/tests/install.rs`, `crates/impact-cli/tests/mcp.rs`) asserting the installed rule text and the MCP instructions both mention proposing while still excluding vague/exploratory discussion.
+
 ## [0.4.0] - 2026-09-02
 
 ### Added

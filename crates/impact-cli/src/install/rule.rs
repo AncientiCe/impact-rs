@@ -12,14 +12,18 @@ pub const RULE_BODY: &str = r#"# Impact Blast-Radius Protocol — MANDATORY
 
 ## BEFORE EDITING
 *Before renaming, removing, or changing the signature of any function, type, enum
-variant, or field — or touching code behind an API route, event, or database table.*
+variant, or field — or touching code behind an API route, event, or database table. This
+also covers proposing such a change: once your proposed fix is concrete enough to state
+as a rename/remove/signature-change target, run this before presenting the proposal,
+even if you haven't written any code yet. Vague, exploratory "here's roughly how I'd
+approach it" discussion that hasn't settled on a concrete target doesn't need it.*
 → If this project hasn't been indexed yet this session (or has changed since), call
   `impact_index` once with the project root.
 → Then call `impact_file` (blast radius of a file) or `impact_change` (blast radius of a
   specific rename/remove/signature change — e.g. `"rename PaymentStatus::Failed"`,
   `"remove field User.email"`, `"change signature of PaymentService::charge"`) to see
   direct/indirect callers, API routes, event types, database tables, and affected tests
-  before writing the change.
+  before writing (or proposing) the change.
 → Treat a nonzero result as a checklist: update every caller and affected test the
   report names, not just the file you were asked to change.
 
