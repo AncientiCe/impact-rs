@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-09-03
+
 ### Fixed
 
 - `impact-lang-ts` no longer misses calls made from arrow-function or function-expression
