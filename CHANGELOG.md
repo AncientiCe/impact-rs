@@ -4,6 +4,26 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- `impact gain`: local usage analytics for the four analysis operations (`index`/
+  `file`/`change`/`diff`), recorded from both the CLI (`impact index`/`query`/`change`/
+  `diff`) and the MCP tools (`impact_index`/`impact_file`/`impact_change`/`impact_diff`)
+  into a new global SQLite DB (`~/.impact/analytics.sqlite` by default, overridable via
+  `IMPACT_ANALYTICS_DB`; disable entirely with `IMPACT_NO_ANALYTICS=1`). Each event
+  carries which command ran, whether it came via the CLI or MCP, the reporting AI
+  client's name (taken from the MCP `initialize` request's `clientInfo`, so usage can be
+  broken down "by all the AIs using this" — falls back to `"cli"`/`"unknown"` when no
+  client identifies itself), duration, and success. `impact gain` rolls these up by day/
+  week/month (`--daily`/`--weekly`/`--monthly`; defaults to monthly) into per-bucket
+  totals plus `by_client`/`by_command` breakdowns, printed as tree-text or `--json`.
+  Recording is best-effort and silent on failure — it can never fail the real command
+  that triggered it, and never makes a network call. `install`/`uninstall`/`doctor`
+  stay untracked (one-off setup, not repeated "usage"). New `crates/impact-cli/src/
+  analytics.rs` module and `crates/impact-cli/tests/analytics.rs` behavior tests
+  (CLI recording + rollup, period label shapes, the opt-out env var, and the MCP
+  `clientInfo` attribution) driving the compiled binary and the real MCP stdio protocol.
+
 ## [0.4.1] - 2026-09-03
 
 ### Changed

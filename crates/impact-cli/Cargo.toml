@@ -28,9 +28,9 @@ serde.workspace = true
 serde_json.workspace = true
 toml_edit.workspace = true
 directories.workspace = true
+rusqlite.workspace = true
 
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
-rusqlite.workspace = true

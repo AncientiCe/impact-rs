@@ -11,13 +11,25 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use anyhow::Result;
+use rusqlite::Connection;
 use serde_json::{json, Value};
 
+use crate::analytics;
 use crate::ops;
+
+/// The MCP client's `clientInfo`, learned from `initialize` and reused to attribute
+/// every subsequent `tools/call` in this stdio session.
+#[derive(Default)]
+struct ClientIdentity {
+    name: Option<String>,
+    version: Option<String>,
+}
 
 pub fn run() -> Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
+    let analytics_conn = analytics::open().ok();
+    let mut client = ClientIdentity::default();
 
     for line in stdin.lock().lines() {
         let line = match line {
@@ -44,7 +56,7 @@ pub fn run() -> Result<()> {
             }
         };
 
-        if let Some(response) = handle_request(&request) {
+        if let Some(response) = handle_request(&request, &mut client, analytics_conn.as_ref()) {
             let mut out = stdout.lock();
             writeln!(out, "{response}")?;
             out.flush()?;
@@ -72,7 +84,11 @@ fn initialize_result(protocol_version: &str) -> Value {
     })
 }
 
-fn handle_request(req: &Value) -> Option<String> {
+fn handle_request(
+    req: &Value,
+    client: &mut ClientIdentity,
+    analytics_conn: Option<&Connection>,
+) -> Option<String> {
     let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
     let params = req.get("params").cloned().unwrap_or_default();
     let req_id = req.get("id").cloned().unwrap_or(Value::Null);
@@ -83,6 +99,16 @@ fn handle_request(req: &Value) -> Option<String> {
                 .get("protocolVersion")
                 .and_then(|v| v.as_str())
                 .unwrap_or("2024-11-05");
+            if let Some(info) = params.get("clientInfo") {
+                client.name = info
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                client.version = info
+                    .get("version")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+            }
             Some(initialize_result(protocol_version))
         }
         "notifications/initialized" => return None,
@@ -90,7 +116,21 @@ fn handle_request(req: &Value) -> Option<String> {
         "tools/call" => {
             let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or_default();
+            let start = std::time::Instant::now();
             let result = dispatch_tool(tool_name, &args);
+            if let (Some(command), Some(conn)) = (usage_command(tool_name), analytics_conn) {
+                analytics::record(
+                    conn,
+                    analytics::UsageEvent {
+                        command,
+                        source: "mcp",
+                        client: client.name.clone().unwrap_or_else(|| "unknown".to_string()),
+                        client_version: client.version.clone(),
+                        duration_ms: start.elapsed().as_millis() as u64,
+                        success: result.get("error").is_none(),
+                    },
+                );
+            }
             Some(json!({
                 "content": [{"type": "text", "text": serde_json::to_string_pretty(&result).unwrap_or_default()}]
             }))
@@ -181,6 +221,18 @@ fn tool_list() -> Value {
             }
         }
     ])
+}
+
+/// Maps an MCP tool name to the canonical usage-analytics command name shared with the
+/// CLI's equivalent subcommand (`impact query` and `impact_file` are both `"file"`).
+fn usage_command(tool_name: &str) -> Option<&'static str> {
+    match tool_name {
+        "impact_index" => Some("index"),
+        "impact_file" => Some("file"),
+        "impact_change" => Some("change"),
+        "impact_diff" => Some("diff"),
+        _ => None,
+    }
 }
 
 fn dispatch_tool(name: &str, args: &Value) -> Value {

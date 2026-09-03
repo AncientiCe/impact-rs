@@ -92,6 +92,7 @@ cargo run -p impact-cli -- mcp
 | `impact change "<description>" [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|heuristic] [--json]` | Blast radius of one symbol-level change. |
 | `impact diff [--file <path>] [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|heuristic] [--json]` | Blast radius of a unified diff — reads from `--file`, or stdin if omitted. |
 | `impact mcp` | Start the MCP stdio server. Blocks until stdin closes. |
+| `impact gain [--daily\|--weekly\|--monthly] [--json]` | Usage analytics for `index`/`query`/`change`/`diff` (CLI and MCP combined), rolled up by day/week/month and broken down by client. Defaults to monthly. Recorded locally to `~/.impact/analytics.sqlite`; disable with `IMPACT_NO_ANALYTICS=1`. |
 
 ## `--change` grammar
 

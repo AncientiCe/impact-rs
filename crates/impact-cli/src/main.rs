@@ -1,3 +1,4 @@
+mod analytics;
 mod install;
 mod mcp;
 mod ops;
@@ -208,6 +209,43 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Show recorded usage of `index`/`query`/`change`/`diff` (CLI and MCP combined),
+    /// rolled up by day/week/month and broken down by client. Defaults to monthly.
+    Gain {
+        /// Roll up by day.
+        #[arg(long)]
+        daily: bool,
+        /// Roll up by week.
+        #[arg(long)]
+        weekly: bool,
+        /// Roll up by month (default when no period flag is given).
+        #[arg(long)]
+        monthly: bool,
+        /// Print machine-readable JSON instead of a human summary.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Times `f`, records a CLI usage event for `command` (client from `IMPACT_CLIENT`,
+/// default `"cli"`), and returns `f`'s result unchanged — recording must never change a
+/// command's exit code or output.
+fn with_usage_recorded<T>(
+    command: &'static str,
+    f: impl FnOnce() -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let start = std::time::Instant::now();
+    let result = f();
+    let client = std::env::var("IMPACT_CLIENT").unwrap_or_else(|_| "cli".to_string());
+    analytics::record_new(analytics::UsageEvent {
+        command,
+        source: "cli",
+        client,
+        client_version: None,
+        duration_ms: start.elapsed().as_millis() as u64,
+        success: result.is_ok(),
+    });
+    result
 }
 
 fn main() -> anyhow::Result<()> {
@@ -218,7 +256,9 @@ fn main() -> anyhow::Result<()> {
             json,
             cache_dir,
             force,
-        } => run_index(&path, cache_dir.as_deref(), force, json),
+        } => with_usage_recorded("index", || {
+            run_index(&path, cache_dir.as_deref(), force, json)
+        }),
         Command::Query {
             path,
             project,
@@ -227,15 +267,17 @@ fn main() -> anyhow::Result<()> {
             min_confidence,
             explain,
             json,
-        } => run_query(
-            &path,
-            project.as_deref(),
-            cache_dir.as_deref(),
-            workspace.as_deref(),
-            min_confidence,
-            explain,
-            json,
-        ),
+        } => with_usage_recorded("file", || {
+            run_query(
+                &path,
+                project.as_deref(),
+                cache_dir.as_deref(),
+                workspace.as_deref(),
+                min_confidence,
+                explain,
+                json,
+            )
+        }),
         Command::Change {
             description,
             project,
@@ -244,15 +286,17 @@ fn main() -> anyhow::Result<()> {
             min_confidence,
             explain,
             json,
-        } => run_change(
-            &description,
-            project.as_deref(),
-            cache_dir.as_deref(),
-            workspace.as_deref(),
-            min_confidence,
-            explain,
-            json,
-        ),
+        } => with_usage_recorded("change", || {
+            run_change(
+                &description,
+                project.as_deref(),
+                cache_dir.as_deref(),
+                workspace.as_deref(),
+                min_confidence,
+                explain,
+                json,
+            )
+        }),
         Command::Diff {
             file,
             project,
@@ -261,15 +305,17 @@ fn main() -> anyhow::Result<()> {
             min_confidence,
             explain,
             json,
-        } => run_diff(
-            file.as_deref(),
-            project.as_deref(),
-            cache_dir.as_deref(),
-            workspace.as_deref(),
-            min_confidence,
-            explain,
-            json,
-        ),
+        } => with_usage_recorded("diff", || {
+            run_diff(
+                file.as_deref(),
+                project.as_deref(),
+                cache_dir.as_deref(),
+                workspace.as_deref(),
+                min_confidence,
+                explain,
+                json,
+            )
+        }),
         Command::Mcp => mcp::run(),
         Command::Install {
             client,
@@ -296,7 +342,50 @@ fn main() -> anyhow::Result<()> {
             home_dir,
             json,
         } => run_doctor(&client, &scope, path, home_dir, json),
+        Command::Gain {
+            daily,
+            weekly,
+            monthly,
+            json,
+        } => run_gain(daily, weekly, monthly, json),
     }
+}
+
+fn run_gain(daily: bool, weekly: bool, monthly: bool, json: bool) -> anyhow::Result<()> {
+    if [daily, weekly, monthly].iter().filter(|f| **f).count() > 1 {
+        anyhow::bail!("--daily, --weekly, and --monthly are mutually exclusive");
+    }
+    let period = if daily {
+        analytics::Period::Daily
+    } else if weekly {
+        analytics::Period::Weekly
+    } else {
+        analytics::Period::Monthly
+    };
+
+    let conn = analytics::open()?;
+    let buckets = analytics::rollup(&conn, period, 12)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&buckets)?);
+        return Ok(());
+    }
+    if buckets.is_empty() {
+        println!("no usage recorded yet");
+        return Ok(());
+    }
+    for bucket in &buckets {
+        println!("{} ({} calls)", bucket.label, bucket.total);
+        println!("  BY CLIENT");
+        for (client, count) in &bucket.by_client {
+            println!("    {client:<14} {count}");
+        }
+        println!("  BY COMMAND");
+        for (command, count) in &bucket.by_command {
+            println!("    {command:<14} {count}");
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
