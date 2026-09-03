@@ -397,7 +397,7 @@ dependencies = [
 
 [[package]]
 name = "impact-cli"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -420,7 +420,7 @@ dependencies = [
 
 [[package]]
 name = "impact-core"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -437,7 +437,7 @@ dependencies = [
 
 [[package]]
 name = "impact-lang-go"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "impact-core",
@@ -448,7 +448,7 @@ dependencies = [
 
 [[package]]
 name = "impact-lang-kotlin"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "impact-core",
@@ -459,7 +459,7 @@ dependencies = [
 
 [[package]]
 name = "impact-lang-python"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "impact-core",
@@ -470,7 +470,7 @@ dependencies = [
 
 [[package]]
 name = "impact-lang-rust"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "impact-core",
@@ -481,7 +481,7 @@ dependencies = [
 
 [[package]]
 name = "impact-lang-swift"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "impact-core",
@@ -492,7 +492,7 @@ dependencies = [
 
 [[package]]
 name = "impact-lang-ts"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "impact-core",
