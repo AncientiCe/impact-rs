@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-03
+
 ### Fixed
 
 - `cargo test`/`make check` in this checkout no longer pollutes a developer's real
