@@ -4,6 +4,21 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- `cargo test`/`make check` in this checkout no longer pollutes a developer's real
+  `~/.impact/analytics.sqlite`: dozens of pre-existing integration tests invoke the
+  compiled `impact` binary via `assert_cmd` without knowing anything about usage
+  analytics, so every one of them fell through to `analytics::db_path`'s real default
+  and quietly recorded test noise into it on every test run — including MCP-sourced
+  rows attributed to `"unknown"` (`tests/mcp.rs`'s hand-rolled JSON-RPC helper never
+  sends `clientInfo`, unlike a real MCP client). New `.cargo/config.toml` sets
+  `IMPACT_ANALYTICS_DB` to a `target/`-local, gitignored path for every `cargo`
+  invocation in this workspace (`cargo run`/`cargo test` alike), so only a properly
+  installed/released `impact` binary — never a dev checkout's build or test suite —
+  writes to the real global DB. `crates/impact-cli/tests/analytics.rs`'s own tests
+  already set `IMPACT_ANALYTICS_DB` explicitly per test and are unaffected.
+
 ### Changed
 
 - `impact gain`'s human (non-`--json`) output is now a colored bar chart instead of a

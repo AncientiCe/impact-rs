@@ -1,0 +1,8 @@
+[env]
+# `cargo run`/`cargo test` in this checkout must never write into the real, global
+# ~/.impact/analytics.sqlite — dozens of existing integration tests invoke the compiled
+# `impact` binary via `assert_cmd` without knowing anything about analytics, so without
+# this they'd all fall through to the real default path on every `cargo test`/`make
+# check` and pollute a real user's usage history with test noise. `target/` is
+# gitignored, so this file is local and harmless to commit.
+IMPACT_ANALYTICS_DB = { value = "target/dev-analytics.sqlite", relative = true }
