@@ -155,6 +155,39 @@ fn no_analytics_env_var_disables_recording() {
     assert_eq!(buckets.as_array().unwrap().len(), 0);
 }
 
+/// The human (non-`--json`) rendering is a bar chart per breakdown, with no ANSI escapes
+/// when stdout isn't a terminal — exactly what `assert_cmd` gives it, so this doubles as
+/// proof color is properly gated on a real TTY check, not always-on.
+#[test]
+fn gain_text_output_is_a_colorless_bar_chart_when_piped() {
+    let analytics_db = tempfile::tempdir().unwrap().path().join("analytics.sqlite");
+    let cache_dir = tempfile::tempdir().unwrap();
+
+    run_index(&analytics_db, cache_dir.path());
+    run_query(&analytics_db, cache_dir.path());
+
+    let output = cmd(&analytics_db).arg("gain").output().unwrap();
+    assert!(
+        output.status.success(),
+        "impact gain failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        !text.contains('\x1b'),
+        "piped output should have no ANSI escapes: {text}"
+    );
+    assert!(text.contains("BY CLIENT"), "{text}");
+    assert!(text.contains("BY COMMAND"), "{text}");
+    assert!(
+        text.contains('█') || text.contains('░'),
+        "expected a bar chart: {text}"
+    );
+    assert!(text.contains('%'), "expected a percentage column: {text}");
+    assert!(text.contains("2 calls"), "{text}");
+}
+
 /// Calls made over the real MCP stdio protocol are recorded with the client name the
 /// session reported in `initialize`'s `clientInfo`.
 #[test]

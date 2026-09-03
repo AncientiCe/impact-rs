@@ -3,7 +3,7 @@ mod install;
 mod mcp;
 mod ops;
 
-use std::io::{self, Read};
+use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -374,18 +374,103 @@ fn run_gain(daily: bool, weekly: bool, monthly: bool, json: bool) -> anyhow::Res
         println!("no usage recorded yet");
         return Ok(());
     }
-    for bucket in &buckets {
-        println!("{} ({} calls)", bucket.label, bucket.total);
-        println!("  BY CLIENT");
-        for (client, count) in &bucket.by_client {
-            println!("    {client:<14} {count}");
+    let color = std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal();
+    for (i, bucket) in buckets.iter().enumerate() {
+        if i > 0 {
+            println!();
         }
-        println!("  BY COMMAND");
-        for (command, count) in &bucket.by_command {
-            println!("    {command:<14} {count}");
-        }
+        print_gain_bucket(bucket, color);
     }
     Ok(())
+}
+
+const ANSI_RESET: &str = "\x1b[0m";
+const ANSI_BOLD: &str = "\x1b[1m";
+const ANSI_DIM: &str = "\x1b[2m";
+const ANSI_CYAN: &str = "\x1b[96m";
+const ANSI_YELLOW: &str = "\x1b[33m";
+const GAIN_BAR_WIDTH: usize = 24;
+
+fn styled(text: &str, code: &str, color: bool) -> String {
+    if color {
+        format!("{code}{text}{ANSI_RESET}")
+    } else {
+        text.to_string()
+    }
+}
+
+/// A thousands-grouped `u64` (`12345` -> `"12,345"`) — the only formatting `impact gain`
+/// needs beyond alignment, so no separate crate for it.
+fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    digits
+        .as_bytes()
+        .rchunks(3)
+        .rev()
+        .map(|chunk| std::str::from_utf8(chunk).unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// A `width`-cell bar, `pct`% filled with `█`, the rest `░` — dimmed when unfilled so the
+/// filled portion (optionally colored) reads at a glance.
+fn gain_bar(pct: f64, color: bool) -> String {
+    let filled = ((pct / 100.0) * GAIN_BAR_WIDTH as f64).round() as usize;
+    let filled = filled.min(GAIN_BAR_WIDTH);
+    let empty = GAIN_BAR_WIDTH - filled;
+    format!(
+        "{}{}",
+        styled(&"█".repeat(filled), ANSI_CYAN, color),
+        styled(&"░".repeat(empty), ANSI_DIM, color)
+    )
+}
+
+fn print_gain_bucket(bucket: &analytics::Bucket, color: bool) {
+    let title = format!("{}  ·  {} calls", bucket.label, grouped(bucket.total));
+    let failed = bucket.total - bucket.success;
+    let title = if failed > 0 {
+        format!(
+            "{title}  ·  {}",
+            styled(&format!("{failed} failed"), ANSI_YELLOW, color)
+        )
+    } else {
+        title
+    };
+    println!("{}", styled(&title, ANSI_BOLD, color));
+    println!(
+        "{}",
+        styled(&"─".repeat(title.chars().count().max(28)), ANSI_DIM, color)
+    );
+    print_gain_breakdown("BY CLIENT", &bucket.by_client, bucket.total, color);
+    println!();
+    print_gain_breakdown("BY COMMAND", &bucket.by_command, bucket.total, color);
+}
+
+fn print_gain_breakdown(title: &str, entries: &[(String, u64)], total: u64, color: bool) {
+    println!("  {}", styled(title, ANSI_BOLD, color));
+    let name_width = entries
+        .iter()
+        .map(|(name, _)| name.chars().count())
+        .max()
+        .unwrap_or(0);
+    let count_width = entries
+        .iter()
+        .map(|(_, count)| grouped(*count).len())
+        .max()
+        .unwrap_or(1);
+    for (name, count) in entries {
+        let pct = if total > 0 {
+            *count as f64 / total as f64 * 100.0
+        } else {
+            0.0
+        };
+        let count_str = grouped(*count);
+        println!(
+            "    {name:<name_width$}  {}  {count_str:>count_width$}  {}",
+            gain_bar(pct, color),
+            styled(&format!("{pct:>5.1}%"), ANSI_DIM, color),
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

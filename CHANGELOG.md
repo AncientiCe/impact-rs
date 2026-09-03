@@ -4,6 +4,18 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- `impact gain`'s human (non-`--json`) output is now a colored bar chart instead of a
+  plain aligned list: each `BY CLIENT`/`BY COMMAND` entry gets a `█`/`░` bar plus a
+  percentage of the bucket's total, bucket totals are thousands-grouped (`1,234 calls`),
+  and a bucket with any failed calls shows the count in yellow. Color (bold headers, a
+  dim divider rule, a cyan bar fill) is only emitted when stdout is a real terminal and
+  `NO_COLOR` isn't set — piped/redirected output (scripts, `impact gain | less`, this
+  project's own tests) stays plain ASCII with no ANSI escapes. 1 new behavior test
+  (`crates/impact-cli/tests/analytics.rs`) asserting the piped output is escape-free and
+  contains the bar/percentage columns.
+
 ## [0.5.0] - 2026-09-03
 
 ### Added
