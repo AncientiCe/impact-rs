@@ -4,6 +4,22 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- `impact-lang-ts` no longer misses calls made from arrow-function or function-expression
+  components/hooks — `const Foo = () => {...}` and `const Foo = function () {...}` were
+  previously invisible to both `extract_symbols` and `extract_references`, since `walk`
+  and `collect_refs` only recognized `function_declaration`/`method_definition` as
+  function-scope-introducing constructs. This was a significant false-negative for any
+  React/React Native codebase favoring arrow-function components/hooks over the
+  `function` keyword — the dominant modern style. Both now also recognize a
+  `lexical_declaration`/`variable_declaration`'s `variable_declarator` whose value is an
+  `arrow_function` or `function_expression` as a named function-scope, including a
+  concise/expression-bodied arrow (`() => helper()`, no braces) where tree-sitter puts the
+  call directly in the `body` field rather than inside a `statement_block`. New
+  `ts_arrow_functions` fixture and 1 new behavior test covering all four shapes (block-body
+  arrow, exported block-body arrow, function expression, concise-body arrow).
+
 ## [0.5.1] - 2026-09-03
 
 ### Fixed

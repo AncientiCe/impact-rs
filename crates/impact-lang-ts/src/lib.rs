@@ -21,7 +21,12 @@
 //!
 //! Deliberately scoped down relative to `impact-lang-rust`: functions, classes, and
 //! methods (`extract_symbols`), and calls including simple method calls
-//! (`extract_references`). Detects tests by file-naming convention only (`is_test_file`)
+//! (`extract_references`). A named function-scope isn't only `function foo() {}` —
+//! `const foo = () => {}` and `const foo = function () {}` count too (see
+//! `push_fn_valued_declarators`/`collect_refs_fn_valued_declarators`), since that's the
+//! dominant style for React/React Native components and hooks; an unnamed arrow/function
+//! expression (e.g. passed inline as a callback argument) still isn't a symbol of its own,
+//! same as it never was. Detects tests by file-naming convention only (`is_test_file`)
 //! — every JS/TS test framework's own *call*-based marker (`test()`/`it()`, `describe`
 //! blocks) varies enough between Jest/Vitest/Mocha that guessing at one would be worse
 //! than not detecting it, but `*.test.*`/`*.spec.*`/`__tests__/` is a naming convention
@@ -227,12 +232,52 @@ fn walk(node: Node, source: &[u8], prefix: &str, is_test_file: bool, out: &mut V
                     push(out, NodeKind::Function, prefix, name, child, is_test_file);
                 }
             }
+            "lexical_declaration" | "variable_declaration" => {
+                push_fn_valued_declarators(child, source, prefix, is_test_file, out);
+            }
             "export_statement" => {
                 // `export function foo() {}` / `export class X {}` wrap the real
                 // declaration one level down — unwrap transparently, same prefix.
                 walk(child, source, prefix, is_test_file, out);
             }
             _ => {}
+        }
+    }
+}
+
+/// A `const`/`let`/`var` declaration's `variable_declarator` children whose value is an
+/// `arrow_function` or `function_expression` are named function-scopes too —
+/// `const Foo = () => {...}` and `const Foo = function () {...}` are the dominant style
+/// for React/React Native components and hooks, and were previously invisible to this
+/// adapter entirely (see the module doc for the false-negative this fixes). Anything else
+/// (`const x = 5`, `const { a, b } = y`) isn't a function and is skipped.
+fn push_fn_valued_declarators(
+    decl: Node,
+    source: &[u8],
+    prefix: &str,
+    is_test_file: bool,
+    out: &mut Vec<SymbolDecl>,
+) {
+    let mut cursor = decl.walk();
+    for declarator in decl.children(&mut cursor) {
+        if declarator.kind() != "variable_declarator" {
+            continue;
+        }
+        let is_fn_value = declarator
+            .child_by_field_name("value")
+            .is_some_and(|v| matches!(v.kind(), "arrow_function" | "function_expression"));
+        if !is_fn_value {
+            continue;
+        }
+        if let Some(name) = field_text(declarator, "name", source) {
+            push(
+                out,
+                NodeKind::Function,
+                prefix,
+                name,
+                declarator,
+                is_test_file,
+            );
         }
     }
 }
@@ -280,6 +325,9 @@ fn collect_refs(
                     }
                 }
             }
+            "lexical_declaration" | "variable_declaration" => {
+                collect_refs_fn_valued_declarators(child, source, prefix, current_fn, out);
+            }
             "call_expression" => {
                 if let (Some(from), Some(func)) =
                     (current_fn, child.child_by_field_name("function"))
@@ -308,6 +356,42 @@ fn collect_refs(
             _ => {
                 collect_refs(child, source, prefix, current_fn, out);
             }
+        }
+    }
+}
+
+/// The `collect_refs` counterpart to `push_fn_valued_declarators`: for each
+/// `variable_declarator` in a `const`/`let`/`var` declaration whose value is an
+/// `arrow_function` or `function_expression`, recurse into that function with `current_fn`
+/// switched to the declarator's name — mirroring the `function_declaration` arm above.
+/// Recursing from the function node itself (not just its `body` field) matters for a
+/// concise/expression-bodied arrow function like `() => helper()`: there, tree-sitter puts
+/// the call expression directly in the `body` field rather than inside a
+/// `statement_block`, so descending from the function node lets the normal per-child
+/// dispatch below (the `call_expression` arm) match it either way. Any other declarator
+/// (not function-valued, e.g. `const data = fetchData();`) isn't a new function scope, so
+/// it recurses with `current_fn` unchanged — same as today's default fallthrough.
+fn collect_refs_fn_valued_declarators(
+    decl: Node,
+    source: &[u8],
+    prefix: &str,
+    current_fn: Option<&str>,
+    out: &mut Vec<RefDecl>,
+) {
+    let mut cursor = decl.walk();
+    for declarator in decl.children(&mut cursor) {
+        if declarator.kind() != "variable_declarator" {
+            continue;
+        }
+        let fn_value = declarator
+            .child_by_field_name("value")
+            .filter(|v| matches!(v.kind(), "arrow_function" | "function_expression"));
+        match (field_text(declarator, "name", source), fn_value) {
+            (Some(name), Some(value)) => {
+                let qualified = join_path(prefix, name);
+                collect_refs(value, source, prefix, Some(&qualified), out);
+            }
+            _ => collect_refs(declarator, source, prefix, current_fn, out),
         }
     }
 }
