@@ -553,6 +553,7 @@ fn walk(node: Node, source: &[u8], prefix: &str, is_test_file: bool, out: &mut V
             }
             "lexical_declaration" | "variable_declaration" => {
                 push_fn_valued_declarators(child, source, prefix, is_test_file, out);
+                push_call_valued_declarators(child, source, prefix, is_test_file, out);
             }
             "export_statement" => {
                 // `export function foo() {}` / `export class X {}` wrap the real
@@ -621,6 +622,56 @@ fn push_fn_valued_declarators(
             );
         }
     }
+}
+
+/// A top-level `const`/`let`/`var` whose initializer *calls* something runs that call at
+/// module load, which makes the binding a call site with a name — the only name there is
+/// to attribute the call to, since no function encloses it. Registering it as a symbol is
+/// what keeps `export const CLIENT = createClient(config)` from vanishing out of
+/// `config`'s blast radius.
+///
+/// A binding whose initializer calls nothing (`const COLORS = ['red']`) isn't a call site
+/// and isn't indexed — this is about not losing edges, not about cataloguing constants.
+/// Function-valued declarators are already handled by `push_fn_valued_declarators`.
+fn push_call_valued_declarators(
+    decl: Node,
+    source: &[u8],
+    prefix: &str,
+    is_test_file: bool,
+    out: &mut Vec<SymbolDecl>,
+) {
+    let mut cursor = decl.walk();
+    for declarator in decl.children(&mut cursor) {
+        if declarator.kind() != "variable_declarator" {
+            continue;
+        }
+        let Some(value) = declarator.child_by_field_name("value") else {
+            continue;
+        };
+        if matches!(value.kind(), "arrow_function" | "function_expression") {
+            continue;
+        }
+        if !contains_call(value) {
+            continue;
+        }
+        if let Some(name) = field_text(declarator, "name", source) {
+            push(out, NodeKind::Field, prefix, name, declarator, is_test_file);
+        }
+    }
+}
+
+/// Whether this subtree performs a call — the test for "does this initializer do work?".
+fn contains_call(node: Node) -> bool {
+    if node.kind() == "call_expression" {
+        return true;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if contains_call(child) {
+            return true;
+        }
+    }
+    false
 }
 
 /// The rightmost identifier-like leaf in a callee expression: `foo` for `foo()`, `method`
@@ -785,6 +836,22 @@ fn collect_refs_fn_valued_declarators(
                 let qualified = join_path(prefix, name);
                 collect_refs(
                     value,
+                    source,
+                    prefix,
+                    Some(&qualified),
+                    is_test_file,
+                    scope,
+                    out,
+                );
+            }
+            // Not a function, but its initializer may still run a call — and at the top
+            // level (`current_fn` is `None`) the binding is the only thing that call can
+            // be attributed to. Inside a function the enclosing function is the better
+            // answer, so nothing changes there.
+            (Some(name), None) if current_fn.is_none() && contains_call(declarator) => {
+                let qualified = join_path(prefix, name);
+                collect_refs(
+                    declarator,
                     source,
                     prefix,
                     Some(&qualified),

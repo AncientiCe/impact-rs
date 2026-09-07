@@ -28,6 +28,14 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   assertion in a Jest/Vitest/Mocha suite lives inside an anonymous callback passed to
   `it()`, and an anonymous callback introduced no scope, so every call inside one was
   dropped.
+- A call in a top-level binding's initializer is no longer dropped. `var Startup =
+  compute()`, `SETTINGS = load_config()`, `export const CLIENT = createClient(config)` and
+  their Kotlin/Swift equivalents run at load time and are real dependencies, but had no
+  enclosing function to be attributed to, so every adapter silently discarded them. The
+  binding is the call site, so it's now indexed as one — but only when its initializer
+  actually calls something, since this is about not losing edges rather than cataloguing
+  constants. Rust is exempt: a `const`/`static` initializer there must be const-evaluable
+  and can't call ordinary functions.
 - Calls made through a chained call's receiver are no longer dropped. `expect(value)` in
   `expect(value).toEqual(x)`, and `getUser()` in `getUser().save()`, sit in the callee
   rather than in the arguments, and only the arguments were being walked. Fixed in the

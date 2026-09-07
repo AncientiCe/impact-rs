@@ -207,6 +207,11 @@ fn walk(node: Node, source: &[u8], prefix: &str, out: &mut Vec<SymbolDecl>) {
             "decorated_definition" => {
                 walk(child, source, prefix, out);
             }
+            "expression_statement" => {
+                if let Some((name, _)) = module_level_binding(child, source) {
+                    push(out, NodeKind::Field, prefix, name, child, false);
+                }
+            }
             _ => {}
         }
     }
@@ -436,6 +441,18 @@ fn collect_refs(
                     collect_refs(body, source, &new_prefix, current_fn, scope, out);
                 }
             }
+            // At module level (`current_fn` is `None`) a binding's initializer is the
+            // only named thing its calls can belong to. Inside a function the enclosing
+            // function is the better answer, so nothing changes there.
+            "expression_statement" if current_fn.is_none() => {
+                match module_level_binding(child, source) {
+                    Some((name, assignment)) => {
+                        let qualified = join_path(prefix, name);
+                        collect_refs(assignment, source, prefix, Some(&qualified), scope, out);
+                    }
+                    None => collect_refs(child, source, prefix, current_fn, scope, out),
+                }
+            }
             _ => {
                 collect_refs(child, source, prefix, current_fn, scope, out);
             }
@@ -447,6 +464,40 @@ fn find_child_of_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
     let mut cursor = node.walk();
     let found = node.children(&mut cursor).find(|c| c.kind() == kind);
     found
+}
+
+/// A module-level assignment whose right-hand side *calls* something runs that call on
+/// import, which makes the binding a call site with a name — the only name there is to
+/// attribute the call to, since no function encloses it. Without this,
+/// `SETTINGS = load_config()` disappeared from `load_config`'s blast radius entirely.
+///
+/// An assignment that calls nothing (`DEBUG = True`) isn't a call site and isn't indexed:
+/// this is about not losing edges, not about cataloguing constants.
+fn module_level_binding<'a>(statement: Node<'a>, source: &'a [u8]) -> Option<(&'a str, Node<'a>)> {
+    let assignment = find_child_of_kind(statement, "assignment")?;
+    let left = assignment.child_by_field_name("left")?;
+    if left.kind() != "identifier" {
+        return None;
+    }
+    let right = assignment.child_by_field_name("right")?;
+    if !contains_call(right) {
+        return None;
+    }
+    Some((left.utf8_text(source).ok()?, assignment))
+}
+
+/// Whether this subtree performs a call — the test for "does this initializer do work?".
+fn contains_call(node: Node) -> bool {
+    if node.kind() == "call" {
+        return true;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if contains_call(child) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Strips the surrounding quotes from a Python `string` node's raw source text. Doesn't

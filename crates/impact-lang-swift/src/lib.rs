@@ -186,6 +186,11 @@ fn walk(node: Node, source: &[u8], prefix: &str, in_xctest_case: bool, out: &mut
                     }
                 }
             }
+            "property_declaration" => {
+                if let Some(name) = top_level_binding(child, source) {
+                    push(out, NodeKind::Field, prefix, name, child, false);
+                }
+            }
             _ => {}
         }
     }
@@ -195,6 +200,74 @@ fn walk(node: Node, source: &[u8], prefix: &str, in_xctest_case: bool, out: &mut
 /// (which `walk` deliberately doesn't) to find `call_expression`s, recording each as a
 /// `RefDecl` from the enclosing function. `current_fn` is `None` outside any function
 /// body, matching every other adapter's `collect_refs`.
+/// A top-level property whose initializer *calls* something runs that call when the
+/// module loads, which makes the property a call site with a name — the only name there
+/// is to attribute the call to, since no function encloses it. Without this,
+/// `val CLIENT = buildClient()` disappeared from `buildClient`'s blast radius.
+///
+/// A property that calls nothing (`val LIMIT = 10`) isn't a call site and isn't indexed:
+/// this is about not losing edges, not about cataloguing constants.
+///
+/// The name is the first identifier under the declaration's binding pattern, which a real
+/// parse-tree dump confirms comes before the `=` and so before the callee's own
+/// identifier — this must not pick up `compute` from `val STARTUP = compute()`.
+fn top_level_binding<'a>(declaration: Node<'a>, source: &'a [u8]) -> Option<&'a str> {
+    let mut value_runs_a_call = false;
+    let mut past_equals = false;
+    let mut cursor = declaration.walk();
+    for child in declaration.children(&mut cursor) {
+        if child.kind() == "=" {
+            past_equals = true;
+            continue;
+        }
+        if past_equals && contains_call(child) {
+            value_runs_a_call = true;
+            break;
+        }
+    }
+    if !value_runs_a_call {
+        return None;
+    }
+    let mut cursor = declaration.walk();
+    for child in declaration.children(&mut cursor) {
+        if child.kind() == "=" {
+            break;
+        }
+        if let Some(name) = first_identifier(child, source) {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// The first identifier-like leaf in a subtree.
+fn first_identifier<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
+    if matches!(node.kind(), "identifier" | "simple_identifier") {
+        return node.utf8_text(source).ok();
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(found) = first_identifier(child, source) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Whether this subtree performs a call — the test for "does this initializer do work?".
+fn contains_call(node: Node) -> bool {
+    if node.kind() == "call_expression" {
+        return true;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if contains_call(child) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Reads this file's top-level declarations into a `FileScope`.
 ///
 /// Swift is the one language here whose unresolved names stay `Unscoped` rather than
@@ -273,6 +346,17 @@ fn collect_refs(
                 ) {
                     let new_prefix = join_path(prefix, name);
                     collect_refs(body, source, &new_prefix, current_fn, scope, out);
+                }
+            }
+            // At the top level (`current_fn` is `None`) a property's initializer is the
+            // only named thing its calls can belong to.
+            "property_declaration" if current_fn.is_none() => {
+                match top_level_binding(child, source) {
+                    Some(name) => {
+                        let qualified = join_path(prefix, name);
+                        collect_refs(child, source, prefix, Some(&qualified), scope, out);
+                    }
+                    None => collect_refs(child, source, prefix, current_fn, scope, out),
                 }
             }
             _ => {

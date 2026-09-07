@@ -240,9 +240,54 @@ fn walk(node: Node, source: &[u8], prefix: &str, is_test_file: bool, out: &mut V
                     push(out, NodeKind::Type, join_path(prefix, name), child, false);
                 }
             }
+            "var_declaration" | "const_declaration" => {
+                for (name, spec) in package_level_bindings(child, source) {
+                    push(out, NodeKind::Field, join_path(prefix, name), spec, false);
+                }
+            }
             _ => {}
         }
     }
+}
+
+/// Package-level `var`/`const` declarations whose initializer *calls* something. That
+/// call runs at package initialization, which makes the binding a call site with a name —
+/// the only name there is to attribute it to, since no function encloses it. Without
+/// this, `var db = mustConnect()` disappeared from `mustConnect`'s blast radius.
+///
+/// A binding that calls nothing (`var limit = 10`) isn't a call site and isn't indexed.
+fn package_level_bindings<'a>(declaration: Node<'a>, source: &'a [u8]) -> Vec<(&'a str, Node<'a>)> {
+    let mut out = Vec::new();
+    let mut cursor = declaration.walk();
+    for spec in declaration.children(&mut cursor) {
+        if !matches!(spec.kind(), "var_spec" | "const_spec") {
+            continue;
+        }
+        let Some(value) = spec.child_by_field_name("value") else {
+            continue;
+        };
+        if !contains_call(value) {
+            continue;
+        }
+        if let Some(name) = field_text(spec, "name", source) {
+            out.push((name, spec));
+        }
+    }
+    out
+}
+
+/// Whether this subtree performs a call — the test for "does this initializer do work?".
+fn contains_call(node: Node) -> bool {
+    if node.kind() == "call_expression" {
+        return true;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if contains_call(child) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Walks the same top-level shapes as `walk`, but descends into function/method bodies
@@ -437,6 +482,14 @@ fn collect_refs(
                 }
                 if let Some(args) = child.child_by_field_name("arguments") {
                     collect_refs(args, source, prefix, current_fn, ctx, out);
+                }
+            }
+            // At package level (`current_fn` is `None`) a binding's initializer is the
+            // only named thing its calls can belong to.
+            "var_declaration" | "const_declaration" if current_fn.is_none() => {
+                for (name, spec) in package_level_bindings(child, source) {
+                    let qualified = join_path(prefix, name);
+                    collect_refs(spec, source, prefix, Some(&qualified), ctx, out);
                 }
             }
             _ => {
