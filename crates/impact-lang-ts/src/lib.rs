@@ -45,8 +45,8 @@
 use std::path::Path;
 
 use impact_core::{
-    ContractKind, ContractRef, ContractRole, DetectorConfig, EdgeKind, FileAst, LanguageAdapter,
-    NodeKind, RefDecl, RefTarget, SymbolDecl,
+    ContractKind, ContractRef, ContractRole, DetectorConfig, EdgeKind, FileAst, FileScope,
+    LanguageAdapter, NodeKind, RefDecl, RefTarget, SymbolDecl,
 };
 use tree_sitter::Node;
 
@@ -117,12 +117,15 @@ impl LanguageAdapter for TsAdapter {
 
     fn extract_references(&self, ast: &FileAst) -> Vec<RefDecl> {
         let prefix = module_prefix(&ast.path);
+        let source = ast.source.as_bytes();
+        let scope = build_scope(ast.tree.root_node(), source, &ast.path, &prefix);
         let mut out = Vec::new();
         collect_refs(
             ast.tree.root_node(),
-            ast.source.as_bytes(),
+            source,
             &prefix,
             None,
+            &scope,
             &mut out,
         );
         out
@@ -202,6 +205,261 @@ fn push(
         end_line: node.end_position().row + 1,
         is_test,
     });
+}
+
+/// Resolves an import specifier against the file doing the importing, producing the
+/// module path the imported symbols are indexed under — `'./utils'` in
+/// `src/store/sync/actions.js` becomes `store::sync::utils`.
+///
+/// Only relative specifiers resolve. A bare one (`'react'`, `'@scope/pkg'`) names a
+/// package or a build-tool alias, neither of which this adapter can follow without
+/// reading `tsconfig.json`/`package.json`, so its callers stay unresolved rather than
+/// being pinned to a module that may not be the right one.
+///
+/// Extensions are dropped rather than checked against disk, which also makes this
+/// indifferent to whether `./utils` is `utils.ts`, `utils.js` or `utils/index.ts` — the
+/// linker matches on module segments, and `utils/index.ts` is indexed under a path that
+/// still contains `utils` (see `Resolver::in_module`).
+fn resolve_specifier(importer_path: &str, specifier: &str) -> Option<String> {
+    if !specifier.starts_with('.') {
+        return None;
+    }
+    let importer = importer_path.replace('\\', "/");
+    let mut segments: Vec<&str> = importer.split('/').collect();
+    segments.pop();
+
+    for part in specifier.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            other => segments.push(other),
+        }
+    }
+
+    let joined = segments.join("/");
+    let joined = [".tsx", ".ts", ".jsx", ".mjs", ".js"]
+        .iter()
+        .find_map(|ext| joined.strip_suffix(ext))
+        .unwrap_or(&joined)
+        .to_string();
+    Some(module_prefix(&joined))
+}
+
+/// Reads this file's imports and its own top-level declarations into a `FileScope`.
+///
+/// Covers the shapes real TypeScript and JavaScript actually use: named, default and
+/// namespace `import`s, `export ... from` re-exports, and `require()` bound to a `const`
+/// (destructured or whole). A name that none of them introduce, and that this file
+/// doesn't declare, is `Opaque` — in a module system where cross-file access requires an
+/// import, its absence is real information.
+fn build_scope(root: Node, source: &[u8], file_path: &str, prefix: &str) -> FileScope {
+    let mut scope = FileScope::new(prefix, RefTarget::Opaque);
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        match child.kind() {
+            "import_statement" | "export_statement" => {
+                collect_import(child, source, file_path, &mut scope);
+                // `export function foo() {}` declares `foo` here as much as a bare
+                // declaration does.
+                declare_locals(child, source, &mut scope);
+            }
+            "lexical_declaration" | "variable_declaration" => {
+                collect_require(child, source, file_path, &mut scope);
+                declare_locals(child, source, &mut scope);
+            }
+            _ => declare_locals(child, source, &mut scope),
+        }
+    }
+    scope
+}
+
+/// Records every name an `import`/`export ... from` statement binds, against the module
+/// its specifier resolves to.
+fn collect_import(statement: Node, source: &[u8], file_path: &str, scope: &mut FileScope) {
+    let Some(specifier) = statement
+        .child_by_field_name("source")
+        .and_then(|s| ts_string_text(s, source))
+    else {
+        return;
+    };
+    let Some(module) = resolve_specifier(file_path, &specifier) else {
+        return;
+    };
+
+    let mut cursor = statement.walk();
+    for child in statement.children(&mut cursor) {
+        match child.kind() {
+            // `import Default from './x'`
+            "import_clause" => bind_import_clause(child, source, &module, scope),
+            // `export { a, b } from './x'` — the re-exporting file is a path to those
+            // symbols too, so a caller importing them from here still lands in `./x`.
+            "export_clause" => bind_named_imports(child, source, &module, scope),
+            _ => {}
+        }
+    }
+}
+
+fn bind_import_clause(clause: Node, source: &[u8], module: &str, scope: &mut FileScope) {
+    let mut cursor = clause.walk();
+    for child in clause.children(&mut cursor) {
+        match child.kind() {
+            "identifier" => {
+                if let Ok(name) = child.utf8_text(source) {
+                    scope.add_import(name, module);
+                }
+            }
+            "named_imports" => bind_named_imports(child, source, module, scope),
+            "namespace_import" => {
+                // `import * as helpers from './x'` — `helpers.foo()` is a call into `./x`.
+                let mut inner = child.walk();
+                for namespace in child.children(&mut inner) {
+                    if namespace.kind() == "identifier" {
+                        if let Ok(name) = namespace.utf8_text(source) {
+                            scope.add_import(name, module);
+                        }
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Binds each specifier in a `{ a, b as c }` list, keying on the local name (`c`), since
+/// that's what call sites in this file write.
+fn bind_named_imports(list: Node, source: &[u8], module: &str, scope: &mut FileScope) {
+    let mut cursor = list.walk();
+    for child in list.children(&mut cursor) {
+        if !matches!(child.kind(), "import_specifier" | "export_specifier") {
+            continue;
+        }
+        let local = child
+            .child_by_field_name("alias")
+            .or_else(|| child.child_by_field_name("name"));
+        if let Some(name) = local.and_then(|n| n.utf8_text(source).ok()) {
+            scope.add_import(name, module);
+        }
+    }
+}
+
+/// `const { a, b } = require('./x')` and `const x = require('./x')` — CommonJS, still the
+/// shape a lot of real JavaScript uses.
+fn collect_require(declaration: Node, source: &[u8], file_path: &str, scope: &mut FileScope) {
+    let mut cursor = declaration.walk();
+    for declarator in declaration.children(&mut cursor) {
+        if declarator.kind() != "variable_declarator" {
+            continue;
+        }
+        let Some(module) = declarator
+            .child_by_field_name("value")
+            .and_then(|value| require_specifier(value, source))
+            .and_then(|specifier| resolve_specifier(file_path, &specifier))
+        else {
+            continue;
+        };
+        let Some(pattern) = declarator.child_by_field_name("name") else {
+            continue;
+        };
+        match pattern.kind() {
+            "identifier" => {
+                if let Ok(name) = pattern.utf8_text(source) {
+                    scope.add_import(name, &module);
+                }
+            }
+            "object_pattern" => {
+                let mut inner = pattern.walk();
+                for element in pattern.children(&mut inner) {
+                    let name = match element.kind() {
+                        "shorthand_property_identifier_pattern" => element.utf8_text(source).ok(),
+                        "pair_pattern" => element
+                            .child_by_field_name("value")
+                            .and_then(|v| v.utf8_text(source).ok()),
+                        _ => None,
+                    };
+                    if let Some(name) = name {
+                        scope.add_import(name, &module);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The string argument of a `require(...)` call, or `None` if this isn't one.
+fn require_specifier(value: Node, source: &[u8]) -> Option<String> {
+    if value.kind() != "call_expression" {
+        return None;
+    }
+    let callee = value.child_by_field_name("function")?;
+    if callee.utf8_text(source).ok()? != "require" {
+        return None;
+    }
+    let arguments = value.child_by_field_name("arguments")?;
+    let mut cursor = arguments.walk();
+    let mut found = None;
+    for argument in arguments.children(&mut cursor) {
+        if let Some(text) = ts_string_text(argument, source) {
+            found = Some(text);
+            break;
+        }
+    }
+    found
+}
+
+/// Records the names a top-level declaration introduces, so a call to one of them can be
+/// tied to this file rather than to a same-named symbol elsewhere.
+fn declare_locals(node: Node, source: &[u8], scope: &mut FileScope) {
+    match node.kind() {
+        "function_declaration" | "class_declaration" => {
+            if let Some(name) = field_text(node, "name", source) {
+                scope.declare_local(name);
+            }
+        }
+        "lexical_declaration" | "variable_declaration" => {
+            let mut cursor = node.walk();
+            for declarator in node.children(&mut cursor) {
+                if declarator.kind() != "variable_declarator" {
+                    continue;
+                }
+                if let Some(name) = field_text(declarator, "name", source) {
+                    scope.declare_local(name);
+                }
+            }
+        }
+        "export_statement" => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                declare_locals(child, source, scope);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Where a call's callee points, as far as this file can say: a bare name it imports or
+/// declares, `this.method()` (the enclosing class is declared here), or a call through an
+/// imported namespace. A method call on anything else has a receiver this adapter can't
+/// type, so it stays `Opaque`.
+fn call_target(callee: Node, source: &[u8], scope: &FileScope) -> RefTarget {
+    match callee.kind() {
+        "identifier" => callee
+            .utf8_text(source)
+            .map(|name| scope.bare(name))
+            .unwrap_or(RefTarget::Opaque),
+        "member_expression" => match callee.child_by_field_name("object") {
+            Some(object) if object.kind() == "this" => scope.own(),
+            Some(object) if object.kind() == "identifier" => object
+                .utf8_text(source)
+                .map(|name| scope.qualified(name))
+                .unwrap_or(RefTarget::Opaque),
+            _ => RefTarget::Opaque,
+        },
+        _ => RefTarget::Opaque,
+    }
 }
 
 /// Walks top-level declarations (transparently unwrapping `export`/`export default`) and
@@ -312,6 +570,7 @@ fn collect_refs(
     source: &[u8],
     prefix: &str,
     current_fn: Option<&str>,
+    scope: &FileScope,
     out: &mut Vec<RefDecl>,
 ) {
     let mut cursor = node.walk();
@@ -321,12 +580,12 @@ fn collect_refs(
                 if let Some(name) = field_text(child, "name", source) {
                     let qualified = join_path(prefix, name);
                     if let Some(body) = child.child_by_field_name("body") {
-                        collect_refs(body, source, prefix, Some(&qualified), out);
+                        collect_refs(body, source, prefix, Some(&qualified), scope, out);
                     }
                 }
             }
             "lexical_declaration" | "variable_declaration" => {
-                collect_refs_fn_valued_declarators(child, source, prefix, current_fn, out);
+                collect_refs_fn_valued_declarators(child, source, prefix, current_fn, scope, out);
             }
             "call_expression" => {
                 if let (Some(from), Some(func)) =
@@ -337,12 +596,12 @@ fn collect_refs(
                             from_qualified_path: from.to_string(),
                             to_name: name.to_string(),
                             kind: EdgeKind::Calls,
-                            to_target: RefTarget::Unscoped,
+                            to_target: call_target(func, source, scope),
                         });
                     }
                 }
                 if let Some(args) = child.child_by_field_name("arguments") {
-                    collect_refs(args, source, prefix, current_fn, out);
+                    collect_refs(args, source, prefix, current_fn, scope, out);
                 }
             }
             "class_declaration" => {
@@ -351,11 +610,11 @@ fn collect_refs(
                     child.child_by_field_name("body"),
                 ) {
                     let new_prefix = join_path(prefix, name);
-                    collect_refs(body, source, &new_prefix, current_fn, out);
+                    collect_refs(body, source, &new_prefix, current_fn, scope, out);
                 }
             }
             _ => {
-                collect_refs(child, source, prefix, current_fn, out);
+                collect_refs(child, source, prefix, current_fn, scope, out);
             }
         }
     }
@@ -377,6 +636,7 @@ fn collect_refs_fn_valued_declarators(
     source: &[u8],
     prefix: &str,
     current_fn: Option<&str>,
+    scope: &FileScope,
     out: &mut Vec<RefDecl>,
 ) {
     let mut cursor = decl.walk();
@@ -390,9 +650,9 @@ fn collect_refs_fn_valued_declarators(
         match (field_text(declarator, "name", source), fn_value) {
             (Some(name), Some(value)) => {
                 let qualified = join_path(prefix, name);
-                collect_refs(value, source, prefix, Some(&qualified), out);
+                collect_refs(value, source, prefix, Some(&qualified), scope, out);
             }
-            _ => collect_refs(declarator, source, prefix, current_fn, out),
+            _ => collect_refs(declarator, source, prefix, current_fn, scope, out),
         }
     }
 }

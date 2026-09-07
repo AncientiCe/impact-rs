@@ -16,6 +16,14 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ### Fixed
 
+- `impact-lang-ts` now resolves calls through the importing file's own `import`/`require`
+  statements instead of by module basename. Querying a file called `utils.js` used to
+  return dozens of confident dependents from every unrelated `utils` module in the repo —
+  and a class calling its own `this.prune()` counted as a caller of any `prune` anywhere.
+  Named, default, namespace (`import * as ns`) and `export ... from` bindings all resolve,
+  as does `require()` bound to a `const`. A bare specifier (`react`, `@scope/pkg`) still
+  can't be followed without reading `tsconfig.json`, so those calls stay unresolved rather
+  than being pinned to a guess.
 - Calls are no longer resolved by short name alone, which reported confident, wrong
   dependents on every language. `words.len()` calling `Vec::len` from the standard
   library was reported as an `Exact` caller of the project's only `len`, and
