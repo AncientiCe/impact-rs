@@ -174,7 +174,7 @@ fn tool_list() -> Value {
         },
         {
             "name": "impact_file",
-            "description": "Report the blast radius of changing a file: direct callers, indirect (transitive) callers, API routes, event types, and database tables the affected code touches, plus a count of affected tests. Each caller is tagged with a confidence tier (exact or heuristic) reflecting how unambiguously the linker resolved it — use min_confidence to hide heuristic (short-name-ambiguous) matches. With workspace_path, also reports which sibling projects registered there are touched by the same API routes/events/tables. Requires impact_index to have run first (and, for cross-project results, the sibling projects to have been indexed too).",
+            "description": "Report the blast radius of changing a file: direct callers, indirect (transitive) callers, API routes, event types, and database tables the affected code touches, plus a count of affected tests. Each caller is tagged with a confidence tier (exact, probable, or heuristic) reflecting what evidence tied the call to this symbol: exact means an import or a declared type did, probable means only a project-unique name did, heuristic means an ambiguous name did — use min_confidence to hide the weaker tiers. With workspace_path, also reports which sibling projects registered there are touched by the same API routes/events/tables. Requires impact_index to have run first (and, for cross-project results, the sibling projects to have been indexed too).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -182,7 +182,7 @@ fn tool_list() -> Value {
                     "project_path": {"type": "string", "description": "Project root the cache was built against (defaults to the current directory)"},
                     "cache_dir": {"type": "string", "description": "Where the index cache lives (defaults to <project_path>/.impact)"},
                     "workspace_path": {"type": "string", "description": "Path to a workspace.toml registering sibling projects, to also compute cross-project impact"},
-                    "min_confidence": {"type": "string", "enum": ["exact", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything)"},
+                    "min_confidence": {"type": "string", "enum": ["exact", "probable", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything). exact = an import or declared type ties the call to this symbol; probable = a unique name with no scope evidence; heuristic = an ambiguous name"},
                     "explain": {"type": "boolean", "description": "Include each INDIRECT entry's chain back to its nearest DIRECT dependent (default: false)"}
                 },
                 "required": ["path"]
@@ -190,7 +190,7 @@ fn tool_list() -> Value {
         },
         {
             "name": "impact_change",
-            "description": "Report the deterministic blast radius of a specific change, described in impact's small fixed grammar: \"rename <path>\", \"rename <path> to <path>\", \"remove <path>\", \"remove variant <Enum>::<Variant>\", \"remove field <Type>.<field>\", or \"change signature of <path>\". Not natural language — an unrecognized description is a hard error, never a best-effort guess. Each caller in the result is tagged with a confidence tier (exact or heuristic); use min_confidence to hide heuristic matches. With workspace_path, also reports cross-project impact like impact_file does. Requires impact_index to have run first.",
+            "description": "Report the deterministic blast radius of a specific change, described in impact's small fixed grammar: \"rename <path>\", \"rename <path> to <path>\", \"remove <path>\", \"remove variant <Enum>::<Variant>\", \"remove field <Type>.<field>\", or \"change signature of <path>\". Not natural language — an unrecognized description is a hard error, never a best-effort guess. Each caller in the result is tagged with a confidence tier (exact, probable, or heuristic); use min_confidence to hide the weaker tiers. With workspace_path, also reports cross-project impact like impact_file does. Requires impact_index to have run first.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -198,7 +198,7 @@ fn tool_list() -> Value {
                     "project_path": {"type": "string", "description": "Project root the cache was built against (defaults to the current directory)"},
                     "cache_dir": {"type": "string", "description": "Where the index cache lives (defaults to <project_path>/.impact)"},
                     "workspace_path": {"type": "string", "description": "Path to a workspace.toml registering sibling projects, to also compute cross-project impact"},
-                    "min_confidence": {"type": "string", "enum": ["exact", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything)"},
+                    "min_confidence": {"type": "string", "enum": ["exact", "probable", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything). exact = an import or declared type ties the call to this symbol; probable = a unique name with no scope evidence; heuristic = an ambiguous name"},
                     "explain": {"type": "boolean", "description": "Include each INDIRECT entry's chain back to its nearest DIRECT dependent (default: false)"}
                 },
                 "required": ["description"]
@@ -206,7 +206,7 @@ fn tool_list() -> Value {
         },
         {
             "name": "impact_diff",
-            "description": "Report the combined blast radius of a unified diff (e.g. `git diff` output) — every symbol the diff's touched lines fall inside, across every file it mentions. Useful for checking the blast radius of a change you're about to apply (or already have, uncommitted) in one call instead of one impact_file call per touched file. Requires the project to be indexed against the diff's new side — i.e. the working tree as it currently stands. Each caller in the result is tagged with a confidence tier (exact or heuristic); use min_confidence to hide heuristic matches. With workspace_path, also reports cross-project impact like impact_file does.",
+            "description": "Report the combined blast radius of a unified diff (e.g. `git diff` output) — every symbol the diff's touched lines fall inside, across every file it mentions. Useful for checking the blast radius of a change you're about to apply (or already have, uncommitted) in one call instead of one impact_file call per touched file. Requires the project to be indexed against the diff's new side — i.e. the working tree as it currently stands. Each caller in the result is tagged with a confidence tier (exact, probable, or heuristic); use min_confidence to hide the weaker tiers. With workspace_path, also reports cross-project impact like impact_file does.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -214,7 +214,7 @@ fn tool_list() -> Value {
                     "project_path": {"type": "string", "description": "Project root the cache was built against (defaults to the current directory)"},
                     "cache_dir": {"type": "string", "description": "Where the index cache lives (defaults to <project_path>/.impact)"},
                     "workspace_path": {"type": "string", "description": "Path to a workspace.toml registering sibling projects, to also compute cross-project impact"},
-                    "min_confidence": {"type": "string", "enum": ["exact", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything)"},
+                    "min_confidence": {"type": "string", "enum": ["exact", "probable", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything). exact = an import or declared type ties the call to this symbol; probable = a unique name with no scope evidence; heuristic = an ambiguous name"},
                     "explain": {"type": "boolean", "description": "Include each INDIRECT entry's chain back to its nearest DIRECT dependent (default: false)"}
                 },
                 "required": ["diff"]
@@ -254,14 +254,15 @@ fn path_arg(args: &Value, key: &str) -> Option<PathBuf> {
 }
 
 /// Parses the optional `min_confidence` tool argument, rejecting anything other than the
-/// two documented values with a clear error rather than silently ignoring a typo.
+/// three documented values with a clear error rather than silently ignoring a typo.
 fn min_confidence_arg(args: &Value) -> Result<Option<impact_core::Confidence>, String> {
     match args.get("min_confidence").and_then(|v| v.as_str()) {
         None => Ok(None),
         Some("exact") => Ok(Some(impact_core::Confidence::Exact)),
+        Some("probable") => Ok(Some(impact_core::Confidence::Probable)),
         Some("heuristic") => Ok(Some(impact_core::Confidence::Heuristic)),
         Some(other) => Err(format!(
-            "min_confidence must be \"exact\" or \"heuristic\", got {other:?}"
+            "min_confidence must be \"exact\", \"probable\" or \"heuristic\", got {other:?}"
         )),
     }
 }

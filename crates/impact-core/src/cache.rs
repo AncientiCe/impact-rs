@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 
-use crate::adapter::{ContractRef, ContractRole, RefDecl};
+use crate::adapter::{ContractRef, ContractRole, RefDecl, RefTarget};
 use crate::graph::{ContractKind, Edge, EdgeKind, Node, SymbolGraph};
 
 /// Bumped whenever the table shapes below change in a way an already-cached database
@@ -12,7 +12,7 @@ use crate::graph::{ContractKind, Edge, EdgeKind, Node, SymbolGraph};
 /// `migrate` compares this against the database's own `PRAGMA user_version` and wipes
 /// every table before recreating them on a mismatch — simpler and safer than writing a
 /// column-by-column migration for a local, fully-rebuildable index cache.
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 
 /// The build of `impact` that wrote a cache, recorded in the `meta` table. A cache is
 /// only reusable when this matches the running build: content hashes tell us whether a
@@ -102,7 +102,8 @@ impl Cache {
                 file TEXT NOT NULL,
                 from_qualified_path TEXT NOT NULL,
                 to_name TEXT NOT NULL,
-                kind TEXT NOT NULL
+                kind TEXT NOT NULL,
+                to_target TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS refs_file_idx ON refs(file);
             CREATE TABLE IF NOT EXISTS contract_refs (
@@ -252,9 +253,17 @@ impl Cache {
         tx.execute("DELETE FROM refs WHERE file = ?1", params![file])?;
         for r in refs {
             let kind_json = serde_json::to_string(&r.kind)?;
+            let target_json = serde_json::to_string(&r.to_target)?;
             tx.execute(
-                "INSERT INTO refs (file, from_qualified_path, to_name, kind) VALUES (?1, ?2, ?3, ?4)",
-                params![file, r.from_qualified_path, r.to_name, kind_json],
+                "INSERT INTO refs (file, from_qualified_path, to_name, kind, to_target)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    file,
+                    r.from_qualified_path,
+                    r.to_name,
+                    kind_json,
+                    target_json
+                ],
             )?;
         }
         tx.execute("DELETE FROM contract_refs WHERE file = ?1", params![file])?;
@@ -280,21 +289,24 @@ impl Cache {
     pub fn all_refs(&self) -> Result<Vec<RefDecl>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT from_qualified_path, to_name, kind FROM refs")?;
+            .prepare("SELECT from_qualified_path, to_name, kind, to_target FROM refs")?;
         let rows = stmt.query_map([], |row| {
             let from_qualified_path: String = row.get(0)?;
             let to_name: String = row.get(1)?;
             let kind_json: String = row.get(2)?;
-            Ok((from_qualified_path, to_name, kind_json))
+            let target_json: String = row.get(3)?;
+            Ok((from_qualified_path, to_name, kind_json, target_json))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (from_qualified_path, to_name, kind_json) = row?;
+            let (from_qualified_path, to_name, kind_json, target_json) = row?;
             let kind: EdgeKind = serde_json::from_str(&kind_json)?;
+            let to_target: RefTarget = serde_json::from_str(&target_json)?;
             out.push(RefDecl {
                 from_qualified_path,
                 to_name,
                 kind,
+                to_target,
             });
         }
         Ok(out)

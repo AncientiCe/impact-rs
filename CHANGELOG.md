@@ -4,8 +4,25 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- Confidence tiers now describe *what evidence* tied a call to a symbol, not just whether
+  its name was unique. `Exact` means an import, a declared field/binding type, or a
+  same-file declaration ties the call to this symbol; the previously unused `Probable`
+  tier means only a project-unique name did; `Heuristic` still means an ambiguous name.
+  A bare name can no longer produce `Exact`, so some dependents that used to be reported
+  as `exact` are now reported as `probable`. `--min-confidence probable` and the MCP
+  `min_confidence: "probable"` value expose the new tier.
+
 ### Fixed
 
+- Calls are no longer resolved by short name alone, which reported confident, wrong
+  dependents on every language. `words.len()` calling `Vec::len` from the standard
+  library was reported as an `Exact` caller of the project's only `len`, and
+  `--min-confidence exact` did nothing to hide it. Adapters now read what their own file
+  says about a name — its imports, its declarations, the declared type of a field or
+  binding a method is called on — and the linker only accepts `Exact` when one of those
+  ties the call to a specific module.
 - A cache written by a different build of `impact` is now detected and rebuilt
   automatically. Content hashes only say whether a *file* changed, never whether the
   *extractor* did, so upgrading `impact` used to leave every unchanged file skipped and

@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
+
 use crate::graph::{ContractKind, EdgeKind, NodeKind};
 
 /// A parsed source file: the tree-sitter tree plus what produced it. `impact-core`
@@ -28,16 +30,44 @@ pub struct SymbolDecl {
     pub is_test: bool,
 }
 
+/// How far an adapter could narrow down what a reference's `to_name` actually refers to,
+/// using only what's visible in the one file it parsed. The linker needs this because a
+/// bare name on its own is very weak evidence: `prune()` matching exactly one `prune` in
+/// the project does *not* mean the call goes there, and reporting that match as `Exact`
+/// is worse than reporting nothing — it looks authoritative while being wrong.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RefTarget {
+    /// The adapter resolved the name to a module: an import/`use` brought it in, it's
+    /// declared in this same file, or it's visible from the same package. The string is a
+    /// `::`-joined segment path; the linker matches symbols whose own qualified path
+    /// contains those segments (see `Resolver::in_module`), which is what lets a
+    /// directory-scoped language (Go, Kotlin) and a file-scoped one (TypeScript, Rust)
+    /// share one rule.
+    Module(String),
+    /// The adapter looked for scope evidence and found none: a method call on a receiver
+    /// whose type it can't determine, or a bare name with no matching import and no
+    /// same-file declaration. Still resolved structurally — over-reporting beats missing
+    /// a caller — but never as `Exact`.
+    Opaque,
+    /// The language has no file-level import that could narrow this name in the first
+    /// place — Swift's whole-module namespace, where every top-level symbol is visible
+    /// everywhere without ceremony. Structural resolution is then the best evidence
+    /// available rather than a guess, so `Exact` stays on the table.
+    Unscoped,
+}
+
 /// A reference found in one file, before the linker resolves it into a graph `Edge`.
 /// `from_qualified_path` is the containing symbol (e.g. the function a call site is in);
 /// `to_name` is the adapter's best-effort name for the target — a bare identifier, not
-/// necessarily a full qualified path, since resolving it properly (against imports,
-/// types, scope) is the linker's job, not the adapter's.
+/// necessarily a full qualified path, since resolving it properly against the *project*
+/// is the linker's job. `to_target` is what the adapter could work out about the name
+/// from its own file: which module an import binds it to, or that it couldn't tell.
 #[derive(Debug, Clone)]
 pub struct RefDecl {
     pub from_qualified_path: String,
     pub to_name: String,
     pub kind: EdgeKind,
+    pub to_target: RefTarget,
 }
 
 /// Which side of a contract relationship a symbol is on.

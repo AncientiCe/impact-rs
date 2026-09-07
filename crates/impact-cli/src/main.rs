@@ -16,6 +16,7 @@ use impact_core::{Confidence, CrossProjectMatch, ImpactReport};
 #[derive(Clone, Copy, ValueEnum)]
 enum MinConfidence {
     Exact,
+    Probable,
     Heuristic,
 }
 
@@ -23,6 +24,7 @@ impl From<MinConfidence> for Confidence {
     fn from(value: MinConfidence) -> Self {
         match value {
             MinConfidence::Exact => Confidence::Exact,
+            MinConfidence::Probable => Confidence::Probable,
             MinConfidence::Heuristic => Confidence::Heuristic,
         }
     }

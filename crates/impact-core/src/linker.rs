@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::adapter::{ContractRef, ContractRole, RefDecl};
+use crate::adapter::{ContractRef, ContractRole, RefDecl, RefTarget};
 use crate::graph::{Confidence, Edge, EdgeKind, NodeId, NodeKind, SymbolGraph};
 
 /// Resolves a name (however precisely an adapter or a user could state it) against a
@@ -20,17 +20,23 @@ use crate::graph::{Confidence, Edge, EdgeKind, NodeId, NodeKind, SymbolGraph};
 ///
 /// This structural resolution is deliberately not semantic (no type-checking), so it can
 /// over-match — see the module doc on `link` for why that's the right tradeoff here.
+///
+/// These three tiers answer the question a *user* asks (`--change "remove
+/// PaymentService::charge"`), where the name typed is the whole of the evidence. A *call
+/// site* carries more than its name — which module an import bound it to, whether the
+/// receiver's type was knowable — so references resolve through `resolve_ref` instead,
+/// which uses that evidence first and only falls back to these tiers.
 pub struct Resolver<'g> {
     by_qualified_path: HashMap<&'g str, NodeId>,
     by_last_two_segments: HashMap<String, Vec<NodeId>>,
-    by_short_name: HashMap<&'g str, Vec<NodeId>>,
+    by_short_name: HashMap<&'g str, Vec<(&'g str, NodeId)>>,
 }
 
 impl<'g> Resolver<'g> {
     pub fn build(graph: &'g SymbolGraph) -> Self {
         let mut by_qualified_path = HashMap::new();
         let mut by_last_two_segments: HashMap<String, Vec<NodeId>> = HashMap::new();
-        let mut by_short_name: HashMap<&str, Vec<NodeId>> = HashMap::new();
+        let mut by_short_name: HashMap<&str, Vec<(&str, NodeId)>> = HashMap::new();
 
         for node in graph.nodes() {
             // `Module` is deliberately excluded: this project doesn't emit any today
@@ -57,7 +63,7 @@ impl<'g> Resolver<'g> {
             by_short_name
                 .entry(short_name)
                 .or_default()
-                .push(node.id.clone());
+                .push((node.qualified_path.as_str(), node.id.clone()));
         }
 
         Self {
@@ -79,15 +85,93 @@ impl<'g> Resolver<'g> {
             };
             return Some((ids.clone(), confidence));
         }
-        self.by_short_name.get(name).map(|ids| {
-            let confidence = if ids.len() == 1 {
+        self.by_short_name.get(name).map(|matches| {
+            let confidence = if matches.len() == 1 {
                 Confidence::Exact
             } else {
                 Confidence::Heuristic
             };
-            (ids.clone(), confidence)
+            (
+                matches.iter().map(|(_, id)| id.clone()).collect(),
+                confidence,
+            )
         })
     }
+
+    /// Resolves one call site, using whatever the adapter could work out about it (see
+    /// `RefTarget`) before falling back to the structural tiers above.
+    ///
+    /// The rule that matters: a bare name is never enough for `Exact`. Matching exactly
+    /// one symbol project-wide says the *name* is unique, not that the call goes there —
+    /// `words.len()` matches a lone `Counter::len` while actually calling `Vec::len` from
+    /// the standard library, and `x.prune()` matches an unrelated module's `prune`. Only
+    /// an import (or a same-file declaration) is real evidence of where a name points, so
+    /// only `Module` can produce `Exact`.
+    pub fn resolve_ref(&self, r: &RefDecl) -> Option<(Vec<NodeId>, Confidence)> {
+        match &r.to_target {
+            // An empty module is the project root as its own scope, which carries no more
+            // information than the name itself — resolve it structurally.
+            RefTarget::Module(module) if module.is_empty() => self.resolve(&r.to_name),
+            RefTarget::Module(module) => {
+                let ids = self.in_module(module, &r.to_name);
+                if ids.is_empty() {
+                    // The import resolved somewhere outside this project (a dependency, a
+                    // standard-library module). Dropping the edge is right: inventing a
+                    // same-named local match is exactly the false positive this fixes.
+                    return None;
+                }
+                let confidence = if ids.len() == 1 {
+                    Confidence::Exact
+                } else {
+                    Confidence::Probable
+                };
+                Some((ids, confidence))
+            }
+            RefTarget::Opaque => {
+                let (ids, confidence) = self.resolve(&r.to_name)?;
+                Some((ids, confidence.weaker(Confidence::Probable)))
+            }
+            RefTarget::Unscoped => self.resolve(&r.to_name),
+        }
+    }
+
+    /// Every symbol named `name` that lives under `module`, where "under" means the
+    /// module's `::`-separated segments appear as a contiguous run in the symbol's own
+    /// qualified path.
+    ///
+    /// Segment containment rather than a plain prefix match is what lets one rule serve
+    /// languages that scope by file and languages that scope by directory. A TypeScript
+    /// import of `./utils` from `a/sync/actions.js` gives the module `a::sync::utils`,
+    /// which prefixes `a::sync::utils::camelizeOrder` exactly; a Go import of
+    /// `example.com/x/internal/svc` gives the package directory segment `svc`, which
+    /// appears mid-path in `internal::svc::handler::Handle`. Both are the same question:
+    /// is this symbol inside that module?
+    fn in_module(&self, module: &str, name: &str) -> Vec<NodeId> {
+        let Some(candidates) = self.by_short_name.get(name) else {
+            return Vec::new();
+        };
+        let wanted: Vec<&str> = module.split("::").filter(|s| !s.is_empty()).collect();
+        candidates
+            .iter()
+            .filter(|(path, _)| {
+                let segments: Vec<&str> = path.split("::").collect();
+                // The last segment is `name` itself; the module has to sit in front of it.
+                segments
+                    .len()
+                    .checked_sub(1)
+                    .is_some_and(|end| contains_run(&segments[..end], &wanted))
+            })
+            .map(|(_, id)| id.clone())
+            .collect()
+    }
+}
+
+/// Whether `needle`'s segments appear consecutively, in order, anywhere in `haystack`.
+fn contains_run(haystack: &[&str], needle: &[&str]) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    haystack.windows(needle.len()).any(|w| w == needle)
 }
 
 /// Resolves adapter-emitted `RefDecl`s and `ContractRef`s into graph `Edge`s. This is
@@ -104,7 +188,7 @@ pub fn link(graph: &SymbolGraph, refs: &[RefDecl], contract_refs: &[ContractRef]
         let Some((from_ids, _)) = resolver.resolve(&r.from_qualified_path) else {
             continue;
         };
-        let Some((to_ids, confidence)) = resolver.resolve(&r.to_name) else {
+        let Some((to_ids, confidence)) = resolver.resolve_ref(r) else {
             continue;
         };
         for from_id in &from_ids {

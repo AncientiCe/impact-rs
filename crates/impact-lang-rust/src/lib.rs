@@ -1,8 +1,9 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use impact_core::{
     ContractKind, ContractRef, ContractRole, DetectorConfig, EdgeKind, EventStrategy, FileAst,
-    LanguageAdapter, NodeKind, RefDecl, SymbolDecl,
+    FileScope, LanguageAdapter, NodeKind, RefDecl, RefTarget, SymbolDecl,
 };
 use tree_sitter::Node;
 
@@ -63,12 +64,21 @@ impl LanguageAdapter for RustAdapter {
 
     fn extract_references(&self, ast: &FileAst) -> Vec<RefDecl> {
         let prefix = module_prefix(&ast.path);
+        let source = ast.source.as_bytes();
+        let scope = build_scope(ast.tree.root_node(), source, &prefix);
+        let field_types = collect_field_types(ast.tree.root_node(), source);
+        let binding_types = collect_binding_types(ast.tree.root_node(), source);
         let mut out = Vec::new();
         collect_refs(
             ast.tree.root_node(),
-            ast.source.as_bytes(),
+            source,
             &prefix,
             None,
+            &FileContext {
+                scope,
+                field_types,
+                binding_types,
+            },
             &mut out,
         );
         out
@@ -335,6 +345,454 @@ fn last_identifier_text<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
     result
 }
 
+/// Everything one file says about itself that a call site in it can be resolved against:
+/// its imports and own declarations (`FileScope`), plus the declared type of each struct
+/// field, which is what makes `self.service.charge()` resolvable rather than a guess.
+struct FileContext {
+    scope: FileScope,
+    field_types: HashMap<String, String>,
+    binding_types: HashMap<String, String>,
+}
+
+/// Collects this file's `use` declarations and top-level item names into a `FileScope`.
+///
+/// A name with neither a `use` nor a declaration here is `Opaque`: in Rust it's a macro,
+/// a prelude item, or something in another module that this file never named, and none of
+/// those are evidence that a same-named symbol elsewhere in the project is the target.
+fn build_scope(root: Node, source: &[u8], prefix: &str) -> FileScope {
+    let mut scope = FileScope::new(prefix, RefTarget::Opaque);
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        match child.kind() {
+            "use_declaration" => {
+                if let Some(argument) = child.child_by_field_name("argument") {
+                    collect_use(argument, source, prefix, &[], &mut scope);
+                }
+            }
+            "function_item" | "struct_item" | "enum_item" | "trait_item" | "type_item"
+            | "union_item" | "const_item" | "static_item" | "mod_item" => {
+                if let Some(name) = field_text(child, "name", source) {
+                    scope.declare_local(name);
+                }
+            }
+            _ => {}
+        }
+    }
+    scope
+}
+
+/// Walks one `use` tree, accumulating the module path in `path` and recording each leaf
+/// (a plain name, an `as` alias, or a `*`) against the module it came from.
+///
+/// `crate::` and `self::` are dropped: this adapter's module paths are already
+/// crate-relative (see `module_prefix`). `super::` climbs one segment out of the current
+/// module, which is as far as a purely structural reading can honestly go.
+fn collect_use(node: Node, source: &[u8], prefix: &str, path: &[String], scope: &mut FileScope) {
+    match node.kind() {
+        "scoped_identifier" | "scoped_use_list" | "use_wildcard" => {
+            let (qualifier_path, leaf) = match node.kind() {
+                "use_wildcard" => (node.child_by_field_name("path"), None),
+                _ => (
+                    node.child_by_field_name("path"),
+                    node.child_by_field_name("name"),
+                ),
+            };
+            let mut path = path.to_vec();
+            if let Some(qualifier) = qualifier_path {
+                extend_use_path(qualifier, source, prefix, &mut path);
+            }
+            match node.kind() {
+                "use_wildcard" => scope.add_wildcard(path.join("::")),
+                "scoped_use_list" => {
+                    if let Some(list) = node.child_by_field_name("list") {
+                        collect_use(list, source, prefix, &path, scope);
+                    }
+                }
+                _ => {
+                    if let Some(name) = leaf.and_then(|n| n.utf8_text(source).ok()) {
+                        scope.add_import(name, path.join("::"));
+                    }
+                }
+            }
+        }
+        "use_list" => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if !matches!(child.kind(), "," | "{" | "}") {
+                    collect_use(child, source, prefix, path, scope);
+                }
+            }
+        }
+        "use_as_clause" => {
+            // `use a::b::C as D` — D is what call sites here write, a::b is where it lives.
+            let mut path = path.to_vec();
+            if let Some(original) = node.child_by_field_name("path") {
+                if original.kind() == "scoped_identifier" {
+                    if let Some(qualifier) = original.child_by_field_name("path") {
+                        extend_use_path(qualifier, source, prefix, &mut path);
+                    }
+                }
+            }
+            if let Some(alias) = field_text(node, "alias", source) {
+                scope.add_import(alias, path.join("::"));
+            }
+        }
+        "identifier" => {
+            if let Ok(name) = node.utf8_text(source) {
+                scope.add_import(name, path.join("::"));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Appends a `use` path's segments to `path`, normalizing the crate-relative prefixes
+/// this adapter's `module_prefix` doesn't use.
+fn extend_use_path(node: Node, source: &[u8], prefix: &str, path: &mut Vec<String>) {
+    match node.kind() {
+        "scoped_identifier" => {
+            if let Some(inner) = node.child_by_field_name("path") {
+                extend_use_path(inner, source, prefix, path);
+            }
+            if let Some(name) = node.child_by_field_name("name") {
+                extend_use_path(name, source, prefix, path);
+            }
+        }
+        "crate" | "self" => {}
+        "super" => {
+            // One module out from this file's own module.
+            if path.is_empty() {
+                let mut segments: Vec<&str> =
+                    prefix.split("::").filter(|s| !s.is_empty()).collect();
+                segments.pop();
+                path.extend(segments.into_iter().map(str::to_string));
+            }
+        }
+        _ => {
+            if let Ok(text) = node.utf8_text(source) {
+                path.push(text.to_string());
+            }
+        }
+    }
+}
+
+/// Maps each struct field name in this file to its declared type name, so a call through
+/// a field (`self.service.charge()`) can be resolved via the type's own import rather
+/// than falling back to the field name alone.
+///
+/// Keyed by field name across the whole file rather than per struct: the enclosing struct
+/// at a `self.field` call site is knowable, but two structs in one file sharing a field
+/// name *and* disagreeing on its type is rare enough that carrying the extra state buys
+/// nothing. Worst case the wrong type resolves and the call comes back `Probable`.
+fn collect_field_types(root: Node, source: &[u8]) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    collect_field_types_inner(root, source, &mut out);
+    out
+}
+
+fn collect_field_types_inner(node: Node, source: &[u8], out: &mut HashMap<String, String>) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "field_declaration" {
+            if let (Some(name), Some(type_node)) = (
+                field_text(child, "name", source),
+                child.child_by_field_name("type"),
+            ) {
+                if let Some(type_name) = base_type_name(type_node, source) {
+                    out.insert(name.to_string(), type_name.to_string());
+                }
+            }
+            continue;
+        }
+        collect_field_types_inner(child, source, out);
+    }
+}
+
+/// Maps each `let`-bound name in this file to the type it holds, where the binding says
+/// so plainly: an annotation (`let s: PaymentService = ...`), a struct literal, a unit
+/// struct, or an associated-function call (`PaymentService::new()`). That covers how a
+/// receiver acquires its type in most Rust call sites without doing type inference —
+/// anything less obvious is left out, and its method calls stay `Opaque`.
+///
+/// Keyed by name across the file for the same reason `collect_field_types` is: shadowing
+/// the same name with a different type in one file is rare, and getting it wrong costs a
+/// confidence tier, not a missed caller.
+fn collect_binding_types(root: Node, source: &[u8]) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    collect_binding_types_inner(root, source, &mut out);
+    out
+}
+
+fn collect_binding_types_inner(node: Node, source: &[u8], out: &mut HashMap<String, String>) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "let_declaration" {
+            if let Some(name) = child
+                .child_by_field_name("pattern")
+                .filter(|p| p.kind() == "identifier")
+                .and_then(|p| p.utf8_text(source).ok())
+            {
+                let declared = child
+                    .child_by_field_name("type")
+                    .and_then(|t| base_type_name(t, source))
+                    .or_else(|| {
+                        child
+                            .child_by_field_name("value")
+                            .and_then(|v| expression_type_name(v, source))
+                    });
+                if let Some(type_name) = declared {
+                    out.insert(name.to_string(), type_name.to_string());
+                }
+            }
+        }
+        collect_binding_types_inner(child, source, out);
+    }
+}
+
+/// The type an initializer expression obviously produces, or `None` when saying would
+/// mean guessing.
+fn expression_type_name<'a>(value: Node, source: &'a [u8]) -> Option<&'a str> {
+    match value.kind() {
+        // `PaymentService { .. }`
+        "struct_expression" => value
+            .child_by_field_name("name")
+            .and_then(|n| base_type_name(n, source)),
+        // `PaymentService::new(...)` — the qualifier names the type.
+        "call_expression" => {
+            let function = value.child_by_field_name("function")?;
+            if function.kind() != "scoped_identifier" {
+                return None;
+            }
+            let mut segments = Vec::new();
+            path_segments(function.child_by_field_name("path")?, source, &mut segments);
+            let last = segments.last()?;
+            starts_uppercase(last).then(|| {
+                // Borrowed from the source rather than the owned `segments`, so the
+                // returned name outlives this function.
+                function
+                    .child_by_field_name("path")
+                    .and_then(|p| rightmost_identifier(p, source))
+            })?
+        }
+        // A bare unit struct: `let handler = PaymentHandler;`
+        "identifier" | "type_identifier" => value
+            .utf8_text(source)
+            .ok()
+            .filter(|text| starts_uppercase(text)),
+        _ => None,
+    }
+}
+
+fn starts_uppercase(text: &str) -> bool {
+    text.chars().next().is_some_and(char::is_uppercase)
+}
+
+/// The last identifier in a path node, borrowed from the source text.
+fn rightmost_identifier<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
+    if node.kind() == "scoped_identifier" {
+        return node
+            .child_by_field_name("name")
+            .and_then(|n| rightmost_identifier(n, source));
+    }
+    node.utf8_text(source).ok()
+}
+
+/// The bare type name inside whatever wrappers a field declaration uses — `PaymentService`
+/// for `PaymentService`, `&PaymentService`, `Arc<PaymentService>`, `Option<PaymentService>`.
+/// The first `type_identifier` in the subtree is that name for every shape this handles;
+/// a generic container's own name is a `type_identifier` too, so `Arc<T>` yields `Arc`
+/// only when it has no inner named type, which resolves to nothing and is harmless.
+fn base_type_name<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
+    if node.kind() == "generic_type" {
+        if let Some(arguments) = node.child_by_field_name("type_arguments") {
+            if let Some(inner) = base_type_name(arguments, source) {
+                return Some(inner);
+            }
+        }
+    }
+    if node.kind() == "type_identifier" {
+        return node.utf8_text(source).ok();
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(found) = base_type_name(child, source) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Where a call's callee expression points, as far as this file can say.
+///
+/// The shapes that carry evidence: a bare name the file imports or declares, a path
+/// (`crate::repo::save`, `PaymentService::charge`) whose qualifier normalizes to a
+/// module, and `self.method()` / `self.field.method()` where the field's declared type is
+/// known. Anything else — a method call on a local, a parameter, a chained expression —
+/// is `Opaque`, because the receiver's type needs the type inference this adapter
+/// deliberately doesn't do.
+fn call_target(func: Node, source: &[u8], ctx: &FileContext) -> RefTarget {
+    match func.kind() {
+        "identifier" => func
+            .utf8_text(source)
+            .map(|name| ctx.scope.bare(name))
+            .unwrap_or(RefTarget::Opaque),
+        "scoped_identifier" => match func.child_by_field_name("path") {
+            Some(path) => {
+                let mut segments = Vec::new();
+                path_segments(path, source, &mut segments);
+                qualifier_target(&segments, ctx)
+            }
+            None => RefTarget::Opaque,
+        },
+        // `foo::<T>()` — the turbofish wraps the real callee one level down.
+        "generic_function" => match func.child_by_field_name("function") {
+            Some(inner) => call_target(inner, source, ctx),
+            None => RefTarget::Opaque,
+        },
+        "field_expression" => match func.child_by_field_name("value") {
+            Some(receiver) => receiver_target(receiver, source, ctx),
+            None => RefTarget::Opaque,
+        },
+        _ => RefTarget::Opaque,
+    }
+}
+
+/// The target for a method call's receiver: `self` is this file's own module, `self.field`
+/// resolves through the field's declared type, and everything else is `Opaque`.
+fn receiver_target(receiver: Node, source: &[u8], ctx: &FileContext) -> RefTarget {
+    match receiver.kind() {
+        "self" => ctx.scope.own(),
+        "identifier" => receiver
+            .utf8_text(source)
+            .map(|name| binding_target(name, ctx))
+            .unwrap_or(RefTarget::Opaque),
+        "field_expression" => {
+            let is_self_field = receiver
+                .child_by_field_name("value")
+                .is_some_and(|v| v.kind() == "self");
+            if !is_self_field {
+                return RefTarget::Opaque;
+            }
+            receiver
+                .child_by_field_name("field")
+                .and_then(|f| f.utf8_text(source).ok())
+                .and_then(|field| ctx.field_types.get(field))
+                .map(|type_name| ctx.scope.qualified(type_name))
+                .unwrap_or(RefTarget::Opaque)
+        }
+        _ => RefTarget::Opaque,
+    }
+}
+
+/// Where a call on a plain identifier receiver points: through the binding's known type
+/// when there is one (`let handler = PaymentHandler; handler.run()`), otherwise treating
+/// the identifier itself as a qualifier — a module alias or an imported type.
+fn binding_target(name: &str, ctx: &FileContext) -> RefTarget {
+    match ctx.binding_types.get(name) {
+        Some(type_name) => ctx.scope.qualified(type_name),
+        None => ctx.scope.qualified(name),
+    }
+}
+
+/// Flattens a path expression into its segments: `["crate", "repo"]` for `crate::repo`.
+fn path_segments(node: Node, source: &[u8], out: &mut Vec<String>) {
+    if node.kind() == "scoped_identifier" {
+        if let Some(path) = node.child_by_field_name("path") {
+            path_segments(path, source, out);
+        }
+        if let Some(name) = node.child_by_field_name("name") {
+            path_segments(name, source, out);
+        }
+        return;
+    }
+    if let Ok(text) = node.utf8_text(source) {
+        out.push(text.to_string());
+    }
+}
+
+/// Turns a call's qualifier segments into a module, normalizing the crate-relative
+/// prefixes this adapter's `module_prefix` doesn't use (`crate::`, `self::`, `super::`)
+/// and letting an imported or locally-declared leading name win over reading the whole
+/// qualifier as a path — `PaymentService::charge()` names a type, not a module, and only
+/// this file's `use` says where that type lives.
+///
+/// A qualifier that resolves to no module in this project (`std::mem::swap`, `Vec::new`)
+/// deliberately yields a `Module` that matches nothing, so the linker drops the edge
+/// rather than falling back to the name alone.
+fn qualifier_target(segments: &[String], ctx: &FileContext) -> RefTarget {
+    let Some(first) = segments.first() else {
+        return RefTarget::Opaque;
+    };
+    let rest = || segments[1..].join("::");
+    match first.as_str() {
+        "crate" => RefTarget::Module(rest()),
+        "self" => RefTarget::Module(prepend_module(ctx.scope.module(), &rest())),
+        "super" => {
+            let mut parent: Vec<&str> = ctx
+                .scope
+                .module()
+                .split("::")
+                .filter(|s| !s.is_empty())
+                .collect();
+            parent.pop();
+            RefTarget::Module(prepend_module(&parent.join("::"), &rest()))
+        }
+        _ => match ctx.scope.qualified(first) {
+            RefTarget::Opaque => RefTarget::Module(segments.join("::")),
+            resolved => resolved,
+        },
+    }
+}
+
+fn prepend_module(base: &str, rest: &str) -> String {
+    match (base.is_empty(), rest.is_empty()) {
+        (true, _) => rest.to_string(),
+        (false, true) => base.to_string(),
+        (false, false) => format!("{base}::{rest}"),
+    }
+}
+
+/// Where a call found in a macro's flat token stream points. There's no parse tree to
+/// read here (see `scan_macro_calls`), only the tokens either side of the name: a `::`
+/// run in front is a path qualifier, a `.` in front makes it a method call on a receiver
+/// with no type to look up, and neither means a bare name.
+fn macro_call_target(ident: Node, source: &[u8], ctx: &FileContext) -> RefTarget {
+    let mut segments: Vec<String> = Vec::new();
+    let mut previous = ident.prev_sibling();
+    while let Some(separator) = previous {
+        match separator.utf8_text(source) {
+            Ok("::") => {}
+            // `handler.charge()` inside a macro: the receiver is the token in front of
+            // the dot, which a `let` binding may well have given a knowable type.
+            Ok(".") => {
+                return separator
+                    .prev_sibling()
+                    .and_then(|receiver| receiver.utf8_text(source).ok())
+                    .map(|name| binding_target(name, ctx))
+                    .unwrap_or(RefTarget::Opaque);
+            }
+            _ => break,
+        }
+        let Some(segment) = separator.prev_sibling() else {
+            break;
+        };
+        let Ok(text) = segment.utf8_text(source) else {
+            break;
+        };
+        segments.push(text.to_string());
+        previous = segment.prev_sibling();
+    }
+
+    if segments.is_empty() {
+        return ident
+            .utf8_text(source)
+            .map(|name| ctx.scope.bare(name))
+            .unwrap_or(RefTarget::Opaque);
+    }
+    segments.reverse();
+    qualifier_target(&segments, ctx)
+}
+
 /// Walks the same item shapes as `walk`, but descends into function bodies (which `walk`
 /// deliberately doesn't) to find `call_expression`s, recording each as a `RefDecl` from
 /// the enclosing function. `current_fn` is `None` outside any function body, so a call
@@ -345,6 +803,7 @@ fn collect_refs(
     source: &[u8],
     prefix: &str,
     current_fn: Option<&str>,
+    ctx: &FileContext,
     out: &mut Vec<RefDecl>,
 ) {
     let mut cursor = node.walk();
@@ -354,7 +813,7 @@ fn collect_refs(
                 if let Some(name) = field_text(child, "name", source) {
                     let qualified = join_path(prefix, name);
                     if let Some(body) = child.child_by_field_name("body") {
-                        collect_refs(body, source, prefix, Some(&qualified), out);
+                        collect_refs(body, source, prefix, Some(&qualified), ctx, out);
                     }
                 }
             }
@@ -367,11 +826,12 @@ fn collect_refs(
                             from_qualified_path: from.to_string(),
                             to_name: name.to_string(),
                             kind: EdgeKind::Calls,
+                            to_target: call_target(func, source, ctx),
                         });
                     }
                 }
                 if let Some(args) = child.child_by_field_name("arguments") {
-                    collect_refs(args, source, prefix, current_fn, out);
+                    collect_refs(args, source, prefix, current_fn, ctx, out);
                 }
             }
             "impl_item" => {
@@ -380,7 +840,7 @@ fn collect_refs(
                     child.child_by_field_name("body"),
                 ) {
                     let new_prefix = join_path(prefix, type_name);
-                    collect_refs(body, source, &new_prefix, current_fn, out);
+                    collect_refs(body, source, &new_prefix, current_fn, ctx, out);
                 }
             }
             "mod_item" => {
@@ -389,7 +849,7 @@ fn collect_refs(
                     child.child_by_field_name("body"),
                 ) {
                     let new_prefix = join_path(prefix, name);
-                    collect_refs(body, source, &new_prefix, current_fn, out);
+                    collect_refs(body, source, &new_prefix, current_fn, ctx, out);
                 }
             }
             "macro_invocation" => {
@@ -405,7 +865,7 @@ fn collect_refs(
                     let mut mc = child.walk();
                     for grandchild in child.children(&mut mc) {
                         if grandchild.kind() == "token_tree" {
-                            scan_macro_calls(grandchild, source, from, out);
+                            scan_macro_calls(grandchild, source, from, ctx, out);
                         }
                     }
                 }
@@ -421,7 +881,7 @@ fn collect_refs(
                 }
             }
             _ => {
-                collect_refs(child, source, prefix, current_fn, out);
+                collect_refs(child, source, prefix, current_fn, ctx, out);
             }
         }
     }
@@ -439,6 +899,9 @@ fn emit_variant_refs(node: Node, source: &[u8], from: &str, out: &mut Vec<RefDec
                 from_qualified_path: from.to_string(),
                 to_name: text.to_string(),
                 kind: EdgeKind::References,
+                // An `Enum::Variant` pattern already names its own scope — that *is* the
+                // evidence, and it resolves on the linker's last-two-segments tier.
+                to_target: RefTarget::Unscoped,
             });
         }
         return;
@@ -453,7 +916,13 @@ fn emit_variant_refs(node: Node, source: &[u8], from: &str, out: &mut Vec<RefDec
 /// identifier-like token immediately followed (as its next sibling) by a
 /// parenthesized `token_tree` is treated as a call to that name. Recurses into nested
 /// token trees (nested macro/call arguments) to catch calls at any depth.
-fn scan_macro_calls(node: Node, source: &[u8], from: &str, out: &mut Vec<RefDecl>) {
+fn scan_macro_calls(
+    node: Node,
+    source: &[u8],
+    from: &str,
+    ctx: &FileContext,
+    out: &mut Vec<RefDecl>,
+) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if matches!(child.kind(), "identifier" | "field_identifier") {
@@ -462,16 +931,22 @@ fn scan_macro_calls(node: Node, source: &[u8], from: &str, out: &mut Vec<RefDecl
                     && sibling.child(0).is_some_and(|c| c.kind() == "(")
                 {
                     if let Ok(name) = child.utf8_text(source) {
+                        let to_target = if child.kind() == "field_identifier" {
+                            RefTarget::Opaque
+                        } else {
+                            macro_call_target(child, source, ctx)
+                        };
                         out.push(RefDecl {
                             from_qualified_path: from.to_string(),
                             to_name: name.to_string(),
                             kind: EdgeKind::Calls,
+                            to_target,
                         });
                     }
                 }
             }
         }
-        scan_macro_calls(child, source, from, out);
+        scan_macro_calls(child, source, from, ctx, out);
     }
 }
 

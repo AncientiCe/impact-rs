@@ -46,7 +46,7 @@ use std::path::Path;
 
 use impact_core::{
     ContractKind, ContractRef, ContractRole, DetectorConfig, EdgeKind, FileAst, LanguageAdapter,
-    NodeKind, RefDecl, SymbolDecl,
+    NodeKind, RefDecl, RefTarget, SymbolDecl,
 };
 use tree_sitter::Node;
 
@@ -337,6 +337,7 @@ fn collect_refs(
                             from_qualified_path: from.to_string(),
                             to_name: name.to_string(),
                             kind: EdgeKind::Calls,
+                            to_target: RefTarget::Unscoped,
                         });
                     }
                 }

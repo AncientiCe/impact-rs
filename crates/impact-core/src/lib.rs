@@ -7,9 +7,12 @@ pub mod engine;
 pub mod graph;
 pub mod indexer;
 pub mod linker;
+pub mod scope;
 pub mod workspace;
 
-pub use adapter::{ContractRef, ContractRole, FileAst, LanguageAdapter, RefDecl, SymbolDecl};
+pub use adapter::{
+    ContractRef, ContractRole, FileAst, LanguageAdapter, RefDecl, RefTarget, SymbolDecl,
+};
 pub use cache::Cache;
 pub use change::{parse_change, ChangeSpec, ParseChangeError};
 pub use config::{DetectorConfig, EventStrategy, IndexConfig};
@@ -21,6 +24,7 @@ pub use engine::{
 pub use graph::{Confidence, ContractKind, Edge, EdgeKind, Node, NodeId, NodeKind, SymbolGraph};
 pub use indexer::{IndexStats, Indexer};
 pub use linker::{link, Resolver};
+pub use scope::FileScope;
 pub use workspace::{
     cross_project_matches, CrossProjectMatch, LinkConfidence, Workspace, WorkspaceImpactReport,
     WorkspaceLink, WorkspaceProject,
