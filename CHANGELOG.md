@@ -39,7 +39,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 - Calls made through a chained call's receiver are no longer dropped. `expect(value)` in
   `expect(value).toEqual(x)`, and `getUser()` in `getUser().save()`, sit in the callee
   rather than in the arguments, and only the arguments were being walked. Fixed in the
-  TypeScript, Rust, Python and Go adapters (Kotlin and Swift already descended there).
+  TypeScript, Rust, Python and Go adapters (Kotlin and Swift already descended there),
+  with a fixture per language covering it.
 - `impact-lang-ts` now resolves calls through the importing file's own `import`/`require`
   statements instead of by module basename. Querying a file called `utils.js` used to
   return dozens of confident dependents from every unrelated `utils` module in the repo —

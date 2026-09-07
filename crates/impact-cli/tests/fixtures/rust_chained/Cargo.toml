@@ -1,0 +1,5 @@
+[package]
+name = "rust_chained"
+version = "0.1.0"
+edition = "2021"
+publish = false

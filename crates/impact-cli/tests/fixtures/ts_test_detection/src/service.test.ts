@@ -1,5 +1,7 @@
 import { process } from "./service";
 
-export function testProcess(): boolean {
-  return process();
-}
+describe("service", () => {
+  it("processes", () => {
+    expect(process()).toBe(true);
+  });
+});

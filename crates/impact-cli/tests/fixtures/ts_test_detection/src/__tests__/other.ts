@@ -1,5 +1,11 @@
 import { process } from "../service";
 
-export function dirProcess(): boolean {
-  return process();
-}
+describe("directory suite", () => {
+  beforeEach(() => {
+    process();
+  });
+
+  it("works", () => {
+    expect(process()).toBe(true);
+  });
+});
