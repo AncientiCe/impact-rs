@@ -607,9 +607,18 @@ fn run_index(path: &Path, cache_dir: Option<&Path>, force: bool, json: bool) -> 
     if json {
         println!("{}", serde_json::to_string_pretty(&stats)?);
     } else {
+        let pruned = if stats.files_pruned > 0 {
+            format!(", {} deleted files pruned", stats.files_pruned)
+        } else {
+            String::new()
+        };
         println!(
-            "Indexed {} files ({} unchanged, skipped), {} symbols, in {}ms",
-            stats.files_indexed, stats.files_skipped, stats.symbols_indexed, stats.duration_ms
+            "Indexed {} files ({} unchanged, skipped){}, {} symbols, in {}ms",
+            stats.files_indexed,
+            stats.files_skipped,
+            pruned,
+            stats.symbols_indexed,
+            stats.duration_ms
         );
     }
     Ok(())

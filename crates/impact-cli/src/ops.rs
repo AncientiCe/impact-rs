@@ -33,6 +33,13 @@ pub fn index_project(
     let mut cache = Cache::open(&cache_path(&project_root, cache_dir))?;
     if force {
         cache.clear()?;
+    } else if cache.ensure_extractor_version()? {
+        // Content hashes only tell us whether a file changed, not whether the extractor
+        // did — so a cache from another build has to be rebuilt even though every hash
+        // still matches. Say so, rather than silently re-parsing everything.
+        eprintln!(
+            "impact: cache was built by a different impact version, re-indexing from scratch"
+        );
     }
 
     let config = DetectorConfig::load(&project_root)?;

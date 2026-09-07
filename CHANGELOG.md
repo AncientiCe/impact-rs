@@ -4,6 +4,20 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- A cache written by a different build of `impact` is now detected and rebuilt
+  automatically. Content hashes only say whether a *file* changed, never whether the
+  *extractor* did, so upgrading `impact` used to leave every unchanged file skipped and
+  its stale symbols in place until someone ran `--force` — the cause of an index that
+  reported `files_indexed: 11, files_skipped: 2859` on a 2870-file repo right after an
+  upgrade. The cache now records the build that wrote it and re-indexes from scratch on a
+  mismatch, with a notice on stderr.
+- Files deleted from disk are now pruned from the index on the next run instead of
+  lingering forever. A deleted file's symbols used to stay in the graph and keep showing
+  up as callers in a blast radius, pointing at a path that no longer existed. `impact
+  index` reports the count as `files_pruned`.
+
 ## [0.5.2] - 2026-09-03
 
 ### Fixed

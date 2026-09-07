@@ -14,6 +14,10 @@ use crate::graph::{ContractKind, Node, NodeId, NodeKind};
 pub struct IndexStats {
     pub files_indexed: usize,
     pub files_skipped: usize,
+    /// Files dropped from the cache because they're no longer on disk — see
+    /// `Cache::prune_missing`. Counted separately from `files_indexed`/`files_skipped`,
+    /// which only describe files this run actually found.
+    pub files_pruned: usize,
     pub symbols_indexed: usize,
     pub duration_ms: u128,
 }
@@ -49,6 +53,9 @@ impl<'a> Indexer<'a> {
 
         let routed = self.build_routes()?;
         let exclude = self.build_exclude()?;
+        // Every file this run found and claimed for an adapter, whether it was re-parsed
+        // or skipped as unchanged — the set `prune_missing` diffs the cache against.
+        let mut seen: HashSet<String> = HashSet::new();
 
         for entry in WalkBuilder::new(project_root).build() {
             let entry = entry?;
@@ -73,6 +80,8 @@ impl<'a> Indexer<'a> {
 
             let content = std::fs::read_to_string(path)?;
             let content_hash = blake3::hash(content.as_bytes()).to_hex().to_string();
+
+            seen.insert(rel_str.clone());
 
             if cache.file_hash(&rel_str)?.as_deref() == Some(content_hash.as_str()) {
                 stats.files_skipped += 1;
@@ -102,6 +111,11 @@ impl<'a> Indexer<'a> {
             cache.replace_file(&rel_str, &content_hash, &nodes, &refs, &contract_refs)?;
             stats.files_indexed += 1;
         }
+
+        // A file that vanished from disk has to leave the cache before the graph is
+        // rebuilt, or its symbols keep resolving as live callers of everything they used
+        // to call.
+        stats.files_pruned = cache.prune_missing(&seen)?;
 
         // Edges depend on the whole project's symbol table, not just the files touched
         // on this run, so they're always fully recomputed from every cached ref — see

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -11,7 +12,15 @@ use crate::graph::{ContractKind, Edge, EdgeKind, Node, SymbolGraph};
 /// `migrate` compares this against the database's own `PRAGMA user_version` and wipes
 /// every table before recreating them on a mismatch — simpler and safer than writing a
 /// column-by-column migration for a local, fully-rebuildable index cache.
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
+
+/// The build of `impact` that wrote a cache, recorded in the `meta` table. A cache is
+/// only reusable when this matches the running build: content hashes tell us whether a
+/// *file* changed, but say nothing about whether the *extractor* did, so a cache written
+/// by an older build can be full of symbols the current adapters would now extract
+/// differently (or would extract at all). Without this check an upgrade left every
+/// unchanged file skipped and its stale symbols in place until someone ran `--force`.
+const EXTRACTOR_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Per-project SQLite-backed cache of the last-indexed graph, keyed by file content hash
 /// so unchanged files can skip re-parsing on the next index run.
@@ -53,6 +62,7 @@ impl Cache {
             );
             conn.execute_batch(
                 "
+                DROP TABLE IF EXISTS meta;
                 DROP TABLE IF EXISTS file_hashes;
                 DROP TABLE IF EXISTS nodes;
                 DROP TABLE IF EXISTS edges;
@@ -63,6 +73,10 @@ impl Cache {
         }
         conn.execute_batch(
             "
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS file_hashes (
                 file TEXT PRIMARY KEY,
                 content_hash TEXT NOT NULL
@@ -103,6 +117,75 @@ impl Cache {
         )?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())
+    }
+
+    /// Checks the cache against the running build's `EXTRACTOR_VERSION`, wiping it when
+    /// they disagree (a cache written by a different build of `impact`), and re-stamping
+    /// it either way. Returns whether a wipe happened, so the caller can say so.
+    ///
+    /// An empty cache is never "stale" — there's nothing in it that a previous extractor
+    /// could have gotten wrong — so a first-ever index stamps the version silently
+    /// instead of announcing a rebuild of nothing.
+    pub fn ensure_extractor_version(&mut self) -> Result<bool> {
+        let stored: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'extractor_version'",
+                [],
+                |row| row.get(0),
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })?;
+
+        let matches_current = stored.as_deref() == Some(EXTRACTOR_VERSION);
+        let has_content: bool =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM file_hashes", [], |row| {
+                    row.get::<_, i64>(0)
+                })?
+                > 0;
+        let wiped = !matches_current && has_content;
+        if wiped {
+            self.clear()?;
+        }
+        if !matches_current {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('extractor_version', ?1)",
+                params![EXTRACTOR_VERSION],
+            )?;
+        }
+        Ok(wiped)
+    }
+
+    /// Drops every trace of files that are no longer on disk — `seen` is every file the
+    /// current index run walked (parsed or skipped), so anything cached outside that set
+    /// has been deleted or renamed since. Returns how many were pruned.
+    ///
+    /// Without this, a deleted file's nodes and refs lived in the cache forever and kept
+    /// showing up in blast radii, pointing at a path the user could no longer open.
+    pub fn prune_missing(&mut self, seen: &HashSet<String>) -> Result<usize> {
+        let cached: Vec<String> = {
+            let mut stmt = self.conn.prepare("SELECT file FROM file_hashes")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        let missing: Vec<&String> = cached.iter().filter(|f| !seen.contains(*f)).collect();
+        if missing.is_empty() {
+            return Ok(0);
+        }
+
+        let tx = self.conn.transaction()?;
+        for file in &missing {
+            tx.execute("DELETE FROM nodes WHERE file = ?1", params![file])?;
+            tx.execute("DELETE FROM refs WHERE file = ?1", params![file])?;
+            tx.execute("DELETE FROM contract_refs WHERE file = ?1", params![file])?;
+            tx.execute("DELETE FROM file_hashes WHERE file = ?1", params![file])?;
+        }
+        tx.commit()?;
+        Ok(missing.len())
     }
 
     pub fn file_hash(&self, file: &str) -> Result<Option<String>> {
