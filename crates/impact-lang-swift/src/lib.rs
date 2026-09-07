@@ -22,7 +22,8 @@
 use std::path::Path;
 
 use impact_core::{
-    ContractRef, EdgeKind, FileAst, LanguageAdapter, NodeKind, RefDecl, RefTarget, SymbolDecl,
+    ContractRef, EdgeKind, FileAst, FileScope, LanguageAdapter, NodeKind, RefDecl, RefTarget,
+    SymbolDecl,
 };
 use tree_sitter::Node;
 
@@ -72,12 +73,15 @@ impl LanguageAdapter for SwiftAdapter {
 
     fn extract_references(&self, ast: &FileAst) -> Vec<RefDecl> {
         let prefix = module_prefix(&ast.path);
+        let source = ast.source.as_bytes();
+        let scope = build_scope(ast.tree.root_node(), source, &prefix);
         let mut out = Vec::new();
         collect_refs(
             ast.tree.root_node(),
-            ast.source.as_bytes(),
+            source,
             &prefix,
             None,
+            &scope,
             &mut out,
         );
         out
@@ -191,11 +195,51 @@ fn walk(node: Node, source: &[u8], prefix: &str, in_xctest_case: bool, out: &mut
 /// (which `walk` deliberately doesn't) to find `call_expression`s, recording each as a
 /// `RefDecl` from the enclosing function. `current_fn` is `None` outside any function
 /// body, matching every other adapter's `collect_refs`.
+/// Reads this file's top-level declarations into a `FileScope`.
+///
+/// Swift is the one language here whose unresolved names stay `Unscoped` rather than
+/// `Opaque`: `import` names a whole module (Foundation, another framework), never a
+/// symbol, and everything declared at a module's top level is visible throughout it
+/// without ceremony. So a bare `prune(x)` really might be the `prune` in another file,
+/// and the linker's structural tiers are the best evidence available rather than a guess
+/// standing in for evidence. What `self.` gives us is still worth having: it names the
+/// enclosing type, whose members are declared right here.
+fn build_scope(root: Node, source: &[u8], prefix: &str) -> FileScope {
+    let mut scope = FileScope::new(prefix, RefTarget::Unscoped);
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        if matches!(
+            child.kind(),
+            "function_declaration" | "class_declaration" | "protocol_declaration"
+        ) {
+            if let Some(name) = field_text(child, "name", source) {
+                scope.declare_local(name);
+            }
+        }
+    }
+    scope
+}
+
+/// Where a call's callee points: `self.method()` is this file's own module, a bare name
+/// falls through to module-wide resolution, and a call on any other receiver has no type
+/// this adapter can look up.
+fn call_target(callee: Node, source: &[u8], scope: &FileScope) -> RefTarget {
+    let Ok(text) = callee.utf8_text(source) else {
+        return RefTarget::Opaque;
+    };
+    match text.split_once('.') {
+        None => scope.bare(text.trim()),
+        Some(("self", _)) => scope.own(),
+        Some((receiver, _)) => scope.qualified(receiver.trim()),
+    }
+}
+
 fn collect_refs(
     node: Node,
     source: &[u8],
     prefix: &str,
     current_fn: Option<&str>,
+    scope: &FileScope,
     out: &mut Vec<RefDecl>,
 ) {
     let mut cursor = node.walk();
@@ -205,7 +249,7 @@ fn collect_refs(
                 if let Some(name) = field_text(child, "name", source) {
                     let qualified = join_path(prefix, name);
                     if let Some(body) = child.child_by_field_name("body") {
-                        collect_refs(body, source, prefix, Some(&qualified), out);
+                        collect_refs(body, source, prefix, Some(&qualified), scope, out);
                     }
                 }
             }
@@ -216,11 +260,11 @@ fn collect_refs(
                             from_qualified_path: from.to_string(),
                             to_name: name.to_string(),
                             kind: EdgeKind::Calls,
-                            to_target: RefTarget::Unscoped,
+                            to_target: call_target(func, source, scope),
                         });
                     }
                 }
-                collect_refs(child, source, prefix, current_fn, out);
+                collect_refs(child, source, prefix, current_fn, scope, out);
             }
             "class_declaration" => {
                 if let (Some(name), Some(body)) = (
@@ -228,11 +272,11 @@ fn collect_refs(
                     child.child_by_field_name("body"),
                 ) {
                     let new_prefix = join_path(prefix, name);
-                    collect_refs(body, source, &new_prefix, current_fn, out);
+                    collect_refs(body, source, &new_prefix, current_fn, scope, out);
                 }
             }
             _ => {
-                collect_refs(child, source, prefix, current_fn, out);
+                collect_refs(child, source, prefix, current_fn, scope, out);
             }
         }
     }

@@ -24,6 +24,14 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   as does `require()` bound to a `const`. A bare specifier (`react`, `@scope/pkg`) still
   can't be followed without reading `tsconfig.json`, so those calls stay unresolved rather
   than being pinned to a guess.
+- The Python, Go, Kotlin and Swift adapters resolve calls the same way: Python through
+  `import`/`from ... import` (including relative imports) and `self`, Go through package
+  selectors on its imports plus the declared type of every receiver, parameter and `var`,
+  Kotlin through its `import` headers plus same-package visibility, and Swift through
+  `self` and its own declarations. Swift deliberately keeps module-wide structural
+  resolution for bare names, since it has no import that narrows one — every top-level
+  symbol in a Swift module is visible throughout it, so the name really is the evidence
+  there.
 - Calls are no longer resolved by short name alone, which reported confident, wrong
   dependents on every language. `words.len()` calling `Vec::len` from the standard
   library was reported as an `Exact` caller of the project's only `len`, and

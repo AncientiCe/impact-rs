@@ -29,8 +29,8 @@
 use std::path::Path;
 
 use impact_core::{
-    ContractKind, ContractRef, ContractRole, DetectorConfig, EdgeKind, FileAst, LanguageAdapter,
-    NodeKind, RefDecl, RefTarget, SymbolDecl,
+    ContractKind, ContractRef, ContractRole, DetectorConfig, EdgeKind, FileAst, FileScope,
+    LanguageAdapter, NodeKind, RefDecl, RefTarget, SymbolDecl,
 };
 use tree_sitter::Node;
 
@@ -92,12 +92,15 @@ impl LanguageAdapter for PythonAdapter {
 
     fn extract_references(&self, ast: &FileAst) -> Vec<RefDecl> {
         let prefix = module_prefix(&ast.path);
+        let source = ast.source.as_bytes();
+        let scope = build_scope(ast.tree.root_node(), source, &prefix);
         let mut out = Vec::new();
         collect_refs(
             ast.tree.root_node(),
-            ast.source.as_bytes(),
+            source,
             &prefix,
             None,
+            &scope,
             &mut out,
         );
         out
@@ -230,11 +233,165 @@ fn last_identifier_text<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
 /// (which `walk` deliberately doesn't) to find `call`s, recording each as a `RefDecl`
 /// from the enclosing function. `current_fn` is `None` outside any function body,
 /// matching every other adapter's `collect_refs`.
+/// Reads this file's `import` statements and its own top-level definitions into a
+/// `FileScope`.
+///
+/// A name that no import introduces and this file doesn't define is `Opaque`: Python
+/// requires an import to reach another module, so the absence of one is real evidence
+/// that a same-named function elsewhere in the project isn't the target.
+fn build_scope(root: Node, source: &[u8], prefix: &str) -> FileScope {
+    let mut scope = FileScope::new(prefix, RefTarget::Opaque);
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        match child.kind() {
+            "import_from_statement" => collect_from_import(child, source, prefix, &mut scope),
+            "import_statement" => collect_plain_import(child, source, &mut scope),
+            "function_definition" | "class_definition" => {
+                if let Some(name) = field_text(child, "name", source) {
+                    scope.declare_local(name);
+                }
+            }
+            // `@app.route(...)` and friends wrap the definition one level down.
+            "decorated_definition" => {
+                if let Some(definition) = child.child_by_field_name("definition") {
+                    if let Some(name) = field_text(definition, "name", source) {
+                        scope.declare_local(name);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    scope
+}
+
+/// `from a.util import camelize_order`, `from . import helpers`, `from .util import *`.
+fn collect_from_import(statement: Node, source: &[u8], prefix: &str, scope: &mut FileScope) {
+    let Some(module) = statement
+        .child_by_field_name("module_name")
+        .and_then(|m| python_module_path(m, source, prefix))
+    else {
+        return;
+    };
+
+    let mut cursor = statement.walk();
+    let mut names = Vec::new();
+    let mut wildcard = false;
+    for child in statement.children(&mut cursor) {
+        match child.kind() {
+            "wildcard_import" => wildcard = true,
+            "dotted_name" | "aliased_import" => names.push(child),
+            _ => {}
+        }
+    }
+    if wildcard {
+        scope.add_wildcard(module);
+        return;
+    }
+    // The first `dotted_name` is the module itself, not an imported name.
+    let module_name = statement.child_by_field_name("module_name");
+    for name in names {
+        if Some(name) == module_name {
+            continue;
+        }
+        let local = match name.kind() {
+            "aliased_import" => field_text(name, "alias", source),
+            _ => name.utf8_text(source).ok(),
+        };
+        if let Some(local) = local {
+            scope.add_import(local, &module);
+        }
+    }
+}
+
+/// `import a.util` / `import a.util as helpers` — binds the name a call site would write
+/// in front of the dot (`a.util.f()` writes `a`; the alias form writes `helpers`).
+fn collect_plain_import(statement: Node, source: &[u8], scope: &mut FileScope) {
+    let mut cursor = statement.walk();
+    for child in statement.children(&mut cursor) {
+        match child.kind() {
+            "dotted_name" => {
+                if let Ok(text) = child.utf8_text(source) {
+                    if let Some(head) = text.split('.').next() {
+                        scope.add_import(head, head);
+                    }
+                }
+            }
+            "aliased_import" => {
+                let module = child
+                    .child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(source).ok())
+                    .map(|text| text.replace('.', "::"));
+                if let (Some(alias), Some(module)) = (field_text(child, "alias", source), module) {
+                    scope.add_import(alias, module);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Turns an import's module reference into this adapter's `::` module path, resolving the
+/// leading dots of a relative import against the importing file's own package — one dot
+/// is that package, each further dot climbs one level out.
+fn python_module_path(node: Node, source: &[u8], prefix: &str) -> Option<String> {
+    if node.kind() == "relative_import" {
+        let mut package: Vec<&str> = prefix.split("::").filter(|s| !s.is_empty()).collect();
+        // The file's own module segment isn't part of its package.
+        package.pop();
+
+        let text = node.utf8_text(source).ok()?;
+        let dots = text.chars().take_while(|c| *c == '.').count();
+        for _ in 1..dots {
+            package.pop();
+        }
+        let mut segments: Vec<String> = package.into_iter().map(str::to_string).collect();
+        let tail = text.trim_start_matches('.');
+        if !tail.is_empty() {
+            segments.extend(tail.split('.').map(str::to_string));
+        }
+        return Some(segments.join("::"));
+    }
+    Some(node.utf8_text(source).ok()?.replace('.', "::"))
+}
+
+/// Where a call's callee points: a bare name this file imports or defines, `self.method()`
+/// (the enclosing class is defined here), or a call through an imported module name. A
+/// method call on anything else has a receiver with no static type to look up.
+fn call_target(callee: Node, source: &[u8], scope: &FileScope) -> RefTarget {
+    match callee.kind() {
+        "identifier" => callee
+            .utf8_text(source)
+            .map(|name| scope.bare(name))
+            .unwrap_or(RefTarget::Opaque),
+        "attribute" => match callee.child_by_field_name("object") {
+            Some(object) => match leftmost_identifier(object, source) {
+                Some("self") => scope.own(),
+                Some(name) => scope.qualified(name),
+                None => RefTarget::Opaque,
+            },
+            None => RefTarget::Opaque,
+        },
+        _ => RefTarget::Opaque,
+    }
+}
+
+/// The leftmost identifier of an attribute chain: `a` for `a.util.helpers`.
+fn leftmost_identifier<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
+    if node.kind() == "attribute" {
+        return node
+            .child_by_field_name("object")
+            .and_then(|object| leftmost_identifier(object, source));
+    }
+    node.utf8_text(source).ok()
+}
+
 fn collect_refs(
     node: Node,
     source: &[u8],
     prefix: &str,
     current_fn: Option<&str>,
+    scope: &FileScope,
     out: &mut Vec<RefDecl>,
 ) {
     let mut cursor = node.walk();
@@ -244,7 +401,7 @@ fn collect_refs(
                 if let Some(name) = field_text(child, "name", source) {
                     let qualified = join_path(prefix, name);
                     if let Some(body) = child.child_by_field_name("body") {
-                        collect_refs(body, source, prefix, Some(&qualified), out);
+                        collect_refs(body, source, prefix, Some(&qualified), scope, out);
                     }
                 }
             }
@@ -257,12 +414,12 @@ fn collect_refs(
                             from_qualified_path: from.to_string(),
                             to_name: name.to_string(),
                             kind: EdgeKind::Calls,
-                            to_target: RefTarget::Unscoped,
+                            to_target: call_target(func, source, scope),
                         });
                     }
                 }
                 if let Some(args) = child.child_by_field_name("arguments") {
-                    collect_refs(args, source, prefix, current_fn, out);
+                    collect_refs(args, source, prefix, current_fn, scope, out);
                 }
             }
             "class_definition" => {
@@ -271,11 +428,11 @@ fn collect_refs(
                     child.child_by_field_name("body"),
                 ) {
                     let new_prefix = join_path(prefix, name);
-                    collect_refs(body, source, &new_prefix, current_fn, out);
+                    collect_refs(body, source, &new_prefix, current_fn, scope, out);
                 }
             }
             _ => {
-                collect_refs(child, source, prefix, current_fn, out);
+                collect_refs(child, source, prefix, current_fn, scope, out);
             }
         }
     }

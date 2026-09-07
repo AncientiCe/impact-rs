@@ -21,7 +21,8 @@
 use std::path::Path;
 
 use impact_core::{
-    ContractRef, EdgeKind, FileAst, LanguageAdapter, NodeKind, RefDecl, RefTarget, SymbolDecl,
+    ContractRef, EdgeKind, FileAst, FileScope, LanguageAdapter, NodeKind, RefDecl, RefTarget,
+    SymbolDecl,
 };
 use tree_sitter::Node;
 
@@ -70,12 +71,15 @@ impl LanguageAdapter for KotlinAdapter {
 
     fn extract_references(&self, ast: &FileAst) -> Vec<RefDecl> {
         let prefix = module_prefix(&ast.path);
+        let source = ast.source.as_bytes();
+        let scope = build_scope(ast.tree.root_node(), source, &prefix);
         let mut out = Vec::new();
         collect_refs(
             ast.tree.root_node(),
-            ast.source.as_bytes(),
+            source,
             &prefix,
             None,
+            &scope,
             &mut out,
         );
         out
@@ -207,11 +211,90 @@ fn walk(node: Node, source: &[u8], prefix: &str, out: &mut Vec<SymbolDecl>) {
 /// (which `walk` deliberately doesn't) to find `call_expression`s, recording each as a
 /// `RefDecl` from the enclosing function. `current_fn` is `None` outside any function
 /// body, matching every other adapter's `collect_refs`.
+/// The package directory a file belongs to — its module path minus the filename. Kotlin
+/// scopes by package, so a name with no import behind it is most likely declared in a
+/// sibling file of the same directory rather than unresolvable.
+fn package_module(prefix: &str) -> String {
+    let mut segments: Vec<&str> = prefix.split("::").filter(|s| !s.is_empty()).collect();
+    segments.pop();
+    segments.join("::")
+}
+
+/// Reads this file's `import` headers and top-level declarations into a `FileScope`.
+///
+/// Imports are read from the header's source text rather than by node kind: the exact
+/// shape of an import in this grammar varies with what's being imported (a class, a
+/// top-level function, an alias, a star), while the text is always `import a.b.c` or
+/// `import a.b.*`, which is all this needs.
+fn build_scope(root: Node, source: &[u8], prefix: &str) -> FileScope {
+    let package = package_module(prefix);
+    let mut scope = FileScope::new(prefix, RefTarget::Module(package));
+    collect_scope_entries(root, source, &mut scope);
+    scope
+}
+
+fn collect_scope_entries(node: Node, source: &[u8], scope: &mut FileScope) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            kind if kind.contains("import") => {
+                if let Ok(text) = child.utf8_text(source) {
+                    add_import_from_text(text, scope);
+                }
+            }
+            "function_declaration" | "class_declaration" | "object_declaration" => {
+                if let Some(name) = field_text(child, "name", source) {
+                    scope.declare_local(name);
+                }
+            }
+            // The header list and the source file's top level both wrap what we want.
+            _ => collect_scope_entries(child, source, scope),
+        }
+    }
+}
+
+/// Parses one `import a.b.name` / `import a.b.*` / `import a.b.name as alias` header.
+fn add_import_from_text(text: &str, scope: &mut FileScope) {
+    let Some(path) = text.trim().strip_prefix("import") else {
+        return;
+    };
+    let path = path.trim();
+    let (path, alias) = match path.split_once(" as ") {
+        Some((path, alias)) => (path.trim(), Some(alias.trim())),
+        None => (path, None),
+    };
+    let mut segments: Vec<&str> = path.split('.').map(str::trim).collect();
+    let Some(last) = segments.pop() else {
+        return;
+    };
+    let module = segments.join("::");
+    if last == "*" {
+        scope.add_wildcard(module);
+        return;
+    }
+    scope.add_import(alias.unwrap_or(last), module);
+}
+
+/// Where a call's callee points: a bare name (this package unless an import says
+/// otherwise), `this.method()`, or a call through an imported name. A call on any other
+/// receiver has no declared type here to look up.
+fn call_target(callee: Node, source: &[u8], scope: &FileScope) -> RefTarget {
+    let Ok(text) = callee.utf8_text(source) else {
+        return RefTarget::Opaque;
+    };
+    match text.split_once('.') {
+        None => scope.bare(text.trim()),
+        Some(("this", _)) => scope.own(),
+        Some((receiver, _)) => scope.qualified(receiver.trim()),
+    }
+}
+
 fn collect_refs(
     node: Node,
     source: &[u8],
     prefix: &str,
     current_fn: Option<&str>,
+    scope: &FileScope,
     out: &mut Vec<RefDecl>,
 ) {
     let mut cursor = node.walk();
@@ -221,7 +304,7 @@ fn collect_refs(
                 if let Some(name) = field_text(child, "name", source) {
                     let qualified = join_path(prefix, name);
                     if let Some(body) = first_child_of_kind(child, "function_body") {
-                        collect_refs(body, source, prefix, Some(&qualified), out);
+                        collect_refs(body, source, prefix, Some(&qualified), scope, out);
                     }
                 }
             }
@@ -232,11 +315,11 @@ fn collect_refs(
                             from_qualified_path: from.to_string(),
                             to_name: name.to_string(),
                             kind: EdgeKind::Calls,
-                            to_target: RefTarget::Unscoped,
+                            to_target: call_target(func, source, scope),
                         });
                     }
                 }
-                collect_refs(child, source, prefix, current_fn, out);
+                collect_refs(child, source, prefix, current_fn, scope, out);
             }
             "class_declaration" => {
                 if let (Some(name), Some(body)) = (
@@ -244,11 +327,11 @@ fn collect_refs(
                     first_child_of_kind(child, "class_body"),
                 ) {
                     let new_prefix = join_path(prefix, name);
-                    collect_refs(body, source, &new_prefix, current_fn, out);
+                    collect_refs(body, source, &new_prefix, current_fn, scope, out);
                 }
             }
             _ => {
-                collect_refs(child, source, prefix, current_fn, out);
+                collect_refs(child, source, prefix, current_fn, scope, out);
             }
         }
     }

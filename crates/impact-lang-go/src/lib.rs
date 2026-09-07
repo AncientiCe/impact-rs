@@ -27,11 +27,12 @@
 //! no verb to report, and guessing one would be exactly the kind of silent wrong answer
 //! this tool exists to avoid.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use impact_core::{
-    ContractKind, ContractRef, ContractRole, DetectorConfig, EdgeKind, FileAst, LanguageAdapter,
-    NodeKind, RefDecl, RefTarget, SymbolDecl,
+    ContractKind, ContractRef, ContractRole, DetectorConfig, EdgeKind, FileAst, FileScope,
+    LanguageAdapter, NodeKind, RefDecl, RefTarget, SymbolDecl,
 };
 use tree_sitter::Node;
 
@@ -97,14 +98,12 @@ impl LanguageAdapter for GoAdapter {
 
     fn extract_references(&self, ast: &FileAst) -> Vec<RefDecl> {
         let prefix = module_prefix(&ast.path);
+        let source = ast.source.as_bytes();
+        let scope = build_scope(ast.tree.root_node(), source, &prefix);
+        let types = collect_declared_types(ast.tree.root_node(), source);
+        let ctx = FileContext { scope, types };
         let mut out = Vec::new();
-        collect_refs(
-            ast.tree.root_node(),
-            ast.source.as_bytes(),
-            &prefix,
-            None,
-            &mut out,
-        );
+        collect_refs(ast.tree.root_node(), source, &prefix, None, &ctx, &mut out);
         out
     }
 
@@ -250,11 +249,148 @@ fn walk(node: Node, source: &[u8], prefix: &str, is_test_file: bool, out: &mut V
 /// (which `walk` deliberately doesn't) to find `call_expression`s, recording each as a
 /// `RefDecl` from the enclosing function. `current_fn` is `None` outside any function
 /// body, matching every other adapter's `collect_refs`.
+/// This file's imports and declarations, plus the declared type of every named value in
+/// it. Go states types everywhere they matter — method receivers, parameters, `var`
+/// declarations — so a method call's receiver almost always has a type to look up, with
+/// no inference involved.
+struct FileContext {
+    scope: FileScope,
+    types: HashMap<String, String>,
+}
+
+/// The directory a file's package lives in — its module path minus the filename. Go
+/// scopes by package, i.e. by directory, so a name with no import behind it is most
+/// likely a sibling file in that same directory rather than something unresolvable.
+fn package_module(prefix: &str) -> String {
+    let mut segments: Vec<&str> = prefix.split("::").filter(|s| !s.is_empty()).collect();
+    segments.pop();
+    segments.join("::")
+}
+
+fn build_scope(root: Node, source: &[u8], prefix: &str) -> FileScope {
+    let package = package_module(prefix);
+    let mut scope = FileScope::new(prefix, RefTarget::Module(package));
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        match child.kind() {
+            "import_declaration" => collect_imports(child, source, &mut scope),
+            "function_declaration" => {
+                if let Some(name) = field_text(child, "name", source) {
+                    scope.declare_local(name);
+                }
+            }
+            "type_declaration" => {
+                let mut inner = child.walk();
+                for spec in child.children(&mut inner) {
+                    if spec.kind() == "type_spec" {
+                        if let Some(name) = field_text(spec, "name", source) {
+                            scope.declare_local(name);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    scope
+}
+
+/// Binds each import's package name — its alias, or the last segment of its path — to
+/// that last segment, which is the directory the package's files live in and therefore
+/// the module its symbols are indexed under.
+fn collect_imports(declaration: Node, source: &[u8], scope: &mut FileScope) {
+    collect_import_specs(declaration, source, scope);
+}
+
+fn collect_import_specs(node: Node, source: &[u8], scope: &mut FileScope) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "import_spec" {
+            let Some(path) = child
+                .child_by_field_name("path")
+                .and_then(|p| string_literal_text(p, source))
+            else {
+                continue;
+            };
+            let Some(directory) = path.rsplit('/').next().filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            let alias = field_text(child, "name", source).unwrap_or(directory);
+            scope.add_import(alias, directory);
+            continue;
+        }
+        collect_import_specs(child, source, scope);
+    }
+}
+
+/// Maps every named value in this file to its declared type: method receivers, function
+/// parameters, and `var` declarations. Keyed by name across the file — two functions
+/// disagreeing on what `s` is costs a confidence tier, not a missed caller.
+fn collect_declared_types(root: Node, source: &[u8]) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    collect_declared_types_inner(root, source, &mut out);
+    out
+}
+
+fn collect_declared_types_inner(node: Node, source: &[u8], out: &mut HashMap<String, String>) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if matches!(child.kind(), "parameter_declaration" | "var_spec") {
+            if let (Some(name), Some(type_node)) = (
+                field_text(child, "name", source),
+                child.child_by_field_name("type"),
+            ) {
+                if let Ok(text) = type_node.utf8_text(source) {
+                    out.insert(
+                        name.to_string(),
+                        text.trim_start_matches(['*', '&']).to_string(),
+                    );
+                }
+            }
+        }
+        collect_declared_types_inner(child, source, out);
+    }
+}
+
+/// Where a call's callee points. A bare name is this package unless an import shadows it;
+/// a selector (`pkg.Func()`, `p.Method()`) resolves through whichever the operand is — an
+/// imported package, or a value whose declared type this file states.
+fn call_target(callee: Node, source: &[u8], ctx: &FileContext) -> RefTarget {
+    match callee.kind() {
+        "identifier" => callee
+            .utf8_text(source)
+            .map(|name| ctx.scope.bare(name))
+            .unwrap_or(RefTarget::Opaque),
+        "selector_expression" => match callee
+            .child_by_field_name("operand")
+            .and_then(|operand| operand.utf8_text(source).ok())
+        {
+            Some(operand) => operand_target(operand, ctx),
+            None => RefTarget::Opaque,
+        },
+        _ => RefTarget::Opaque,
+    }
+}
+
+/// A selector's operand is either an imported package name or a value. A value's declared
+/// type is what says where its methods live — and a qualified type (`svc.Service`) says
+/// which package, via that package's own import.
+fn operand_target(operand: &str, ctx: &FileContext) -> RefTarget {
+    let Some(declared) = ctx.types.get(operand) else {
+        return ctx.scope.qualified(operand);
+    };
+    match declared.split_once('.') {
+        Some((package, _)) => ctx.scope.qualified(package),
+        None => ctx.scope.qualified(declared),
+    }
+}
+
 fn collect_refs(
     node: Node,
     source: &[u8],
     prefix: &str,
     current_fn: Option<&str>,
+    ctx: &FileContext,
     out: &mut Vec<RefDecl>,
 ) {
     let mut cursor = node.walk();
@@ -264,7 +400,7 @@ fn collect_refs(
                 if let Some(name) = field_text(child, "name", source) {
                     let qualified = join_path(prefix, name);
                     if let Some(body) = child.child_by_field_name("body") {
-                        collect_refs(body, source, prefix, Some(&qualified), out);
+                        collect_refs(body, source, prefix, Some(&qualified), ctx, out);
                     }
                 }
             }
@@ -276,7 +412,7 @@ fn collect_refs(
                     if let Some(receiver_type) = last_identifier_text(receiver, source) {
                         let qualified = join_path(&join_path(prefix, receiver_type), name);
                         if let Some(body) = child.child_by_field_name("body") {
-                            collect_refs(body, source, prefix, Some(&qualified), out);
+                            collect_refs(body, source, prefix, Some(&qualified), ctx, out);
                         }
                     }
                 }
@@ -290,16 +426,16 @@ fn collect_refs(
                             from_qualified_path: from.to_string(),
                             to_name: name.to_string(),
                             kind: EdgeKind::Calls,
-                            to_target: RefTarget::Unscoped,
+                            to_target: call_target(func, source, ctx),
                         });
                     }
                 }
                 if let Some(args) = child.child_by_field_name("arguments") {
-                    collect_refs(args, source, prefix, current_fn, out);
+                    collect_refs(args, source, prefix, current_fn, ctx, out);
                 }
             }
             _ => {
-                collect_refs(child, source, prefix, current_fn, out);
+                collect_refs(child, source, prefix, current_fn, ctx, out);
             }
         }
     }
