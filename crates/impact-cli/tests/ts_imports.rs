@@ -75,6 +75,14 @@ fn dependents_come_from_imports_not_from_matching_names() {
         vec![
             ("printer::airPrint".to_string(), "Heuristic".to_string()),
             (
+                "store::sync::__tests__::utils.spec::sync utils".to_string(),
+                "Exact".to_string()
+            ),
+            (
+                "store::sync::__tests__::utils.spec::sync utils::camelizes an order".to_string(),
+                "Exact".to_string()
+            ),
+            (
                 "store::sync::actions::syncCart".to_string(),
                 "Exact".to_string()
             ),
@@ -96,6 +104,14 @@ fn min_confidence_exact_leaves_only_real_importers() {
     assert_eq!(
         direct(&report),
         vec![
+            (
+                "store::sync::__tests__::utils.spec::sync utils".to_string(),
+                "Exact".to_string()
+            ),
+            (
+                "store::sync::__tests__::utils.spec::sync utils::camelizes an order".to_string(),
+                "Exact".to_string()
+            ),
             (
                 "store::sync::actions::syncCart".to_string(),
                 "Exact".to_string()
@@ -119,4 +135,36 @@ fn a_class_method_call_resolves_within_its_own_file() {
         "nothing calls airPrint, got: {:?}",
         report["direct"]
     );
+}
+
+/// Every assertion in a Jest/Vitest/Mocha suite lives inside an anonymous callback passed
+/// to `it()`, and anonymous callbacks introduced no scope — so the calls inside them were
+/// dropped outright. A JS/TS project's tests were therefore invisible to the whole tool:
+/// `tests: 0` and an empty `affected_tests` on every query, no matter how many spec files
+/// imported the module.
+///
+/// `describe`/`it` blocks now name their own scope, so a test shows up as a dependent —
+/// by its own title, which is what a developer needs to run it — and a `beforeEach` body
+/// counts toward the block that encloses it.
+#[test]
+fn test_blocks_are_dependents_of_what_they_import() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    index(cache_dir.path());
+
+    let report = query(cache_dir.path(), "src/store/sync/utils.js", Some("exact"));
+
+    let names: Vec<String> = report["affected_tests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["path"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "store::sync::__tests__::utils.spec::sync utils".to_string(),
+            "store::sync::__tests__::utils.spec::sync utils::camelizes an order".to_string(),
+        ]
+    );
+    assert_eq!(report["tests"], 2);
 }

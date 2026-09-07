@@ -14,8 +14,24 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   as `exact` are now reported as `probable`. `--min-confidence probable` and the MCP
   `min_confidence: "probable"` value expose the new tier.
 
+### Added
+
+- `describe`/`it`/`test` blocks in a JS/TS test file are now indexed as symbols named
+  after their own titles, so an affected test is reported as something you can go and run
+  rather than just a file. Lifecycle hooks (`beforeEach` and friends) aren't tests and
+  aren't counted as any; their bodies belong to the block that encloses them.
+
 ### Fixed
 
+- A JS/TS project's tests were invisible to the whole tool: `tests: 0` and an empty
+  `affected_tests` on every query, however many spec files imported the module. Every
+  assertion in a Jest/Vitest/Mocha suite lives inside an anonymous callback passed to
+  `it()`, and an anonymous callback introduced no scope, so every call inside one was
+  dropped.
+- Calls made through a chained call's receiver are no longer dropped. `expect(value)` in
+  `expect(value).toEqual(x)`, and `getUser()` in `getUser().save()`, sit in the callee
+  rather than in the arguments, and only the arguments were being walked. Fixed in the
+  TypeScript, Rust, Python and Go adapters (Kotlin and Swift already descended there).
 - `impact-lang-ts` now resolves calls through the importing file's own `import`/`require`
   statements instead of by module basename. Querying a file called `utils.js` used to
   return dozens of confident dependents from every unrelated `utils` module in the repo —

@@ -119,12 +119,14 @@ impl LanguageAdapter for TsAdapter {
         let prefix = module_prefix(&ast.path);
         let source = ast.source.as_bytes();
         let scope = build_scope(ast.tree.root_node(), source, &ast.path, &prefix);
+        let is_test_file = is_test_file(&ast.path);
         let mut out = Vec::new();
         collect_refs(
             ast.tree.root_node(),
             source,
             &prefix,
             None,
+            is_test_file,
             &scope,
             &mut out,
         );
@@ -462,6 +464,65 @@ fn call_target(callee: Node, source: &[u8], scope: &FileScope) -> RefTarget {
     }
 }
 
+/// The call names that introduce a named scope in a test file. Jest, Vitest and Mocha all
+/// share these, which is the same reasoning `is_test_file` uses: a convention all three
+/// agree on is a convention worth reading, unlike the parts where they differ.
+///
+/// Lifecycle hooks (`beforeEach` and friends) are deliberately absent. They aren't tests
+/// and shouldn't be counted as any, and a hook body belongs to whichever block encloses
+/// it — which is what happens anyway, since a call's arguments are walked with the
+/// enclosing scope unchanged.
+const TEST_BLOCK_NAMES: &[&str] = &["describe", "context", "suite", "it", "test", "specify"];
+
+/// The scope name a `describe(...)`/`it(...)` call introduces, together with the callback
+/// whose body belongs to it — or `None` if this isn't a test block.
+///
+/// Real suites put every assertion inside an anonymous callback, which introduces no
+/// named function and so used to swallow every call in it: a JS/TS project's tests were
+/// invisible to this tool entirely. Naming the block after its own title is what makes a
+/// reported test something a developer can act on ("run this one") rather than a file
+/// reference.
+fn test_block<'a>(call: Node<'a>, source: &[u8]) -> Option<(String, Node<'a>)> {
+    let callee = call.child_by_field_name("function")?;
+    let runner = match callee.kind() {
+        "identifier" => callee.utf8_text(source).ok()?,
+        // `describe.only(...)`, `it.skip(...)`, `test.concurrent(...)`.
+        "member_expression" => callee
+            .child_by_field_name("object")
+            .filter(|object| object.kind() == "identifier")
+            .and_then(|object| object.utf8_text(source).ok())?,
+        _ => return None,
+    };
+    if !TEST_BLOCK_NAMES.contains(&runner) {
+        return None;
+    }
+
+    let arguments = call.child_by_field_name("arguments")?;
+    let mut cursor = arguments.walk();
+    let mut title = None;
+    let mut body = None;
+    for argument in arguments.children(&mut cursor) {
+        match argument.kind() {
+            "string" if title.is_none() => title = ts_string_text(argument, source),
+            "arrow_function" | "function_expression" if body.is_none() => body = Some(argument),
+            _ => {}
+        }
+    }
+
+    // A title that isn't a plain literal (a template string, a variable, a `.each` table)
+    // can't be read structurally, so the block falls back to the runner's own name. Two
+    // such siblings collapse into one scope, which is a coarser answer than usual but
+    // still attributes their calls to the right file and suite.
+    let title = title.unwrap_or_else(|| runner.to_string());
+    Some((sanitize_block_title(&title), body?))
+}
+
+/// Keeps a block title from inventing path segments: `::` is how qualified paths are
+/// joined, so a title containing it would parse as nesting that isn't there.
+fn sanitize_block_title(title: &str) -> String {
+    title.replace("::", ":")
+}
+
 /// Walks top-level declarations (transparently unwrapping `export`/`export default`) and
 /// class bodies, extracting one `SymbolDecl` per function, class, and method. Doesn't
 /// descend into function bodies — nested declarations are out of scope, matching
@@ -498,8 +559,30 @@ fn walk(node: Node, source: &[u8], prefix: &str, is_test_file: bool, out: &mut V
                 // declaration one level down — unwrap transparently, same prefix.
                 walk(child, source, prefix, is_test_file, out);
             }
+            _ if is_test_file => walk_test_blocks(child, source, prefix, out),
             _ => {}
         }
+    }
+}
+
+/// Finds `describe`/`it` blocks at any depth in a test file and registers each as a
+/// symbol named after its own title, nested under whichever blocks enclose it.
+///
+/// Separate from `walk` because it wants the opposite thing: `walk` deliberately stops at
+/// a function body, while a suite's structure *is* nested function bodies, and the tests
+/// worth naming are all inside them.
+fn walk_test_blocks(node: Node, source: &[u8], prefix: &str, out: &mut Vec<SymbolDecl>) {
+    if node.kind() == "call_expression" {
+        if let Some((title, body)) = test_block(node, source) {
+            push(out, NodeKind::Function, prefix, &title, node, true);
+            let new_prefix = join_path(prefix, &title);
+            walk_test_blocks(body, source, &new_prefix, out);
+            return;
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        walk_test_blocks(child, source, prefix, out);
     }
 }
 
@@ -565,11 +648,13 @@ fn last_identifier_text<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
 /// (which `walk` deliberately doesn't) to find `call_expression`s, recording each as a
 /// `RefDecl` from the enclosing function. `current_fn` is `None` outside any function
 /// body, matching `impact-lang-rust`'s `collect_refs`.
+#[allow(clippy::too_many_arguments)]
 fn collect_refs(
     node: Node,
     source: &[u8],
     prefix: &str,
     current_fn: Option<&str>,
+    is_test_file: bool,
     scope: &FileScope,
     out: &mut Vec<RefDecl>,
 ) {
@@ -580,12 +665,44 @@ fn collect_refs(
                 if let Some(name) = field_text(child, "name", source) {
                     let qualified = join_path(prefix, name);
                     if let Some(body) = child.child_by_field_name("body") {
-                        collect_refs(body, source, prefix, Some(&qualified), scope, out);
+                        collect_refs(
+                            body,
+                            source,
+                            prefix,
+                            Some(&qualified),
+                            is_test_file,
+                            scope,
+                            out,
+                        );
                     }
                 }
             }
             "lexical_declaration" | "variable_declaration" => {
-                collect_refs_fn_valued_declarators(child, source, prefix, current_fn, scope, out);
+                collect_refs_fn_valued_declarators(
+                    child,
+                    source,
+                    prefix,
+                    current_fn,
+                    is_test_file,
+                    scope,
+                    out,
+                );
+            }
+            "call_expression" if is_test_file && test_block(child, source).is_some() => {
+                // Safe to unwrap the option we just matched on; kept as a `let` so the
+                // borrow of `child` lives long enough for the recursive walk.
+                if let Some((title, body)) = test_block(child, source) {
+                    let qualified = join_path(prefix, &title);
+                    collect_refs(
+                        body,
+                        source,
+                        &join_path(prefix, &title),
+                        Some(&qualified),
+                        is_test_file,
+                        scope,
+                        out,
+                    );
+                }
             }
             "call_expression" => {
                 if let (Some(from), Some(func)) =
@@ -600,8 +717,14 @@ fn collect_refs(
                         });
                     }
                 }
+                // A chained call puts its receiver in the callee, not the arguments:
+                // `expect(value).toEqual(x)` and `getUser().save()` both hide a whole
+                // call in there, and descending only into arguments dropped it.
+                if let Some(callee) = child.child_by_field_name("function") {
+                    collect_refs(callee, source, prefix, current_fn, is_test_file, scope, out);
+                }
                 if let Some(args) = child.child_by_field_name("arguments") {
-                    collect_refs(args, source, prefix, current_fn, scope, out);
+                    collect_refs(args, source, prefix, current_fn, is_test_file, scope, out);
                 }
             }
             "class_declaration" => {
@@ -610,11 +733,19 @@ fn collect_refs(
                     child.child_by_field_name("body"),
                 ) {
                     let new_prefix = join_path(prefix, name);
-                    collect_refs(body, source, &new_prefix, current_fn, scope, out);
+                    collect_refs(
+                        body,
+                        source,
+                        &new_prefix,
+                        current_fn,
+                        is_test_file,
+                        scope,
+                        out,
+                    );
                 }
             }
             _ => {
-                collect_refs(child, source, prefix, current_fn, scope, out);
+                collect_refs(child, source, prefix, current_fn, is_test_file, scope, out);
             }
         }
     }
@@ -631,11 +762,13 @@ fn collect_refs(
 /// dispatch below (the `call_expression` arm) match it either way. Any other declarator
 /// (not function-valued, e.g. `const data = fetchData();`) isn't a new function scope, so
 /// it recurses with `current_fn` unchanged — same as today's default fallthrough.
+#[allow(clippy::too_many_arguments)]
 fn collect_refs_fn_valued_declarators(
     decl: Node,
     source: &[u8],
     prefix: &str,
     current_fn: Option<&str>,
+    is_test_file: bool,
     scope: &FileScope,
     out: &mut Vec<RefDecl>,
 ) {
@@ -650,9 +783,25 @@ fn collect_refs_fn_valued_declarators(
         match (field_text(declarator, "name", source), fn_value) {
             (Some(name), Some(value)) => {
                 let qualified = join_path(prefix, name);
-                collect_refs(value, source, prefix, Some(&qualified), scope, out);
+                collect_refs(
+                    value,
+                    source,
+                    prefix,
+                    Some(&qualified),
+                    is_test_file,
+                    scope,
+                    out,
+                );
             }
-            _ => collect_refs(declarator, source, prefix, current_fn, scope, out),
+            _ => collect_refs(
+                declarator,
+                source,
+                prefix,
+                current_fn,
+                is_test_file,
+                scope,
+                out,
+            ),
         }
     }
 }

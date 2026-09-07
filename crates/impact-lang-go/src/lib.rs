@@ -430,6 +430,11 @@ fn collect_refs(
                         });
                     }
                 }
+                // A chained call hides a whole call in its callee rather than its
+                // arguments: `New().Charge()` calls `New` too.
+                if let Some(callee) = child.child_by_field_name("function") {
+                    collect_refs(callee, source, prefix, current_fn, ctx, out);
+                }
                 if let Some(args) = child.child_by_field_name("arguments") {
                     collect_refs(args, source, prefix, current_fn, ctx, out);
                 }
