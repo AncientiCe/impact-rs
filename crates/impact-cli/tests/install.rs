@@ -72,6 +72,34 @@ fn read_json(path: &Path) -> Value {
     serde_json::from_str(&text).unwrap()
 }
 
+fn claude_settings_path(home: &Path) -> std::path::PathBuf {
+    home.join(".claude").join("settings.json")
+}
+
+/// The `PreToolUse` entries `impact` owns — matched on the command's tail so a reinstall
+/// from a different binary path still finds the one it wrote last time.
+fn impact_hook_entries(settings: &Value) -> Vec<&Value> {
+    settings["hooks"]["PreToolUse"]
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter(|entry| {
+                    entry["hooks"]
+                        .as_array()
+                        .is_some_and(|hooks| {
+                            hooks.iter().any(|h| {
+                                h["command"]
+                                    .as_str()
+                                    .is_some_and(|c| c.trim_end().ends_with("hook pre-tool-use"))
+                            })
+                        })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn client_status<'a>(report: &'a Value, client: &str) -> &'a Value {
     report["clients"]
         .as_array()
@@ -202,6 +230,148 @@ fn readme_publishes_the_installed_rule_text_verbatim() {
         readme.contains(body),
         "README's quoted rule block is stale; it must match what install writes:\n{body}"
     );
+}
+
+/// The rule tells the agent when to run impact; the hook makes the client run it whether
+/// or not the agent remembered. Claude Code is the one supported client with a hook
+/// mechanism, so it is the one that gets it.
+#[test]
+fn install_writes_the_claude_pre_tool_use_hook() {
+    let home = tempfile::tempdir().unwrap();
+
+    install_client(home.path(), "claude", &[]);
+
+    let settings = read_json(&claude_settings_path(home.path()));
+    let entries = impact_hook_entries(&settings);
+    assert_eq!(entries.len(), 1, "expected one impact hook: {settings}");
+    let matcher = entries[0]["matcher"].as_str().unwrap_or_default();
+    for tool in ["Edit", "Write", "Bash"] {
+        assert!(
+            matcher.contains(tool),
+            "hook should match {tool}: {matcher}"
+        );
+    }
+    let command = entries[0]["hooks"][0]["command"].as_str().unwrap();
+    assert!(
+        command.contains("hook pre-tool-use"),
+        "hook should run impact's own hook subcommand: {command}"
+    );
+}
+
+/// Cursor and Codex have no hook mechanism to install into, so installing for them must
+/// not leave a Claude settings file behind.
+#[test]
+fn clients_without_hooks_get_no_settings_file() {
+    let home = tempfile::tempdir().unwrap();
+
+    install_client(home.path(), "cursor", &[]);
+    install_client(home.path(), "codex", &[]);
+
+    assert!(!claude_settings_path(home.path()).exists());
+}
+
+#[test]
+fn no_hook_skips_the_hook() {
+    let home = tempfile::tempdir().unwrap();
+
+    install_client(home.path(), "claude", &["--no-hook"]);
+
+    assert!(!claude_settings_path(home.path()).exists());
+}
+
+#[test]
+fn claude_hook_install_preserves_unrelated_hooks_and_settings() {
+    let home = tempfile::tempdir().unwrap();
+    let settings_path = claude_settings_path(home.path());
+    fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    fs::write(
+        &settings_path,
+        serde_json::to_string_pretty(&json!({
+            "theme": "dark",
+            "hooks": {
+                "PreToolUse": [
+                    {"matcher": "Bash", "hooks": [{"type": "command", "command": "other-tool hook"}]}
+                ],
+                "Stop": [{"hooks": [{"type": "command", "command": "other-tool stop"}]}]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    install_client(home.path(), "claude", &[]);
+
+    let settings = read_json(&settings_path);
+    assert_eq!(settings["theme"], "dark");
+    assert_eq!(
+        settings["hooks"]["Stop"][0]["hooks"][0]["command"],
+        "other-tool stop"
+    );
+    let pre = settings["hooks"]["PreToolUse"].as_array().unwrap();
+    assert_eq!(pre.len(), 2, "impact's hook should be added, not swapped in");
+    assert_eq!(pre[0]["hooks"][0]["command"], "other-tool hook");
+    assert_eq!(impact_hook_entries(&settings).len(), 1);
+}
+
+#[test]
+fn second_claude_install_leaves_the_hook_untouched() {
+    let home = tempfile::tempdir().unwrap();
+
+    install_client(home.path(), "claude", &[]);
+    let report = install_client(home.path(), "claude", &[]);
+
+    assert_eq!(report["hook_changed"], json!([]));
+    assert_eq!(
+        report["hook_unchanged"],
+        json!([claude_settings_path(home.path())])
+    );
+    assert_eq!(
+        impact_hook_entries(&read_json(&claude_settings_path(home.path()))).len(),
+        1
+    );
+}
+
+#[test]
+fn uninstall_removes_only_the_impact_hook() {
+    let home = tempfile::tempdir().unwrap();
+    let settings_path = claude_settings_path(home.path());
+    fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    fs::write(
+        &settings_path,
+        serde_json::to_string_pretty(&json!({
+            "hooks": {
+                "PreToolUse": [
+                    {"matcher": "Bash", "hooks": [{"type": "command", "command": "other-tool hook"}]}
+                ]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    install_client(home.path(), "claude", &[]);
+
+    uninstall_client(home.path(), "claude", &[]);
+
+    let settings = read_json(&settings_path);
+    assert!(impact_hook_entries(&settings).is_empty());
+    assert_eq!(
+        settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+        "other-tool hook"
+    );
+}
+
+#[test]
+fn doctor_reports_the_claude_hook() {
+    let home = tempfile::tempdir().unwrap();
+
+    let before = doctor(home.path(), &["--client", "claude"]);
+    assert_eq!(client_status(&before, "claude")["hook_installed"], false);
+
+    install_client(home.path(), "claude", &[]);
+
+    let after = doctor(home.path(), &["--client", "claude"]);
+    assert_eq!(client_status(&after, "claude")["hook_installed"], true);
+    assert_eq!(client_status(&after, "claude")["hook_current"], true);
 }
 
 #[test]

@@ -72,6 +72,20 @@ pub fn rule_target(options: &InstallOptions, client: Client) -> Result<RuleTarge
     Ok(RuleTarget { path, kind })
 }
 
+/// Where `client`'s tool-call hooks live, if it has a hook mechanism at all. Claude Code
+/// is the only supported client that does — Cursor, Codex and Claude Desktop have none,
+/// so there is nothing for `install` to write them.
+pub fn hook_target(options: &InstallOptions, client: Client) -> Result<Option<PathBuf>> {
+    let path = match (client, options.scope) {
+        (Client::Claude, Scope::User) => options.home_dir.join(".claude").join("settings.json"),
+        (Client::Claude, Scope::Project) => require_project_dir(options)?
+            .join(".claude")
+            .join("settings.json"),
+        _ => return Ok(None),
+    };
+    Ok(Some(path))
+}
+
 /// Derived entirely from `home_dir` (rather than reading `%APPDATA%`/native APIs
 /// directly) so that `--home-dir` reliably redirects it in tests and non-standard
 /// profile setups alike.

@@ -32,7 +32,7 @@ TESTS
 - **`impact change "<description>"`** — the same blast radius for a specific symbol-level change, described in a small deterministic grammar (never natural language, so the same input always resolves the same way): `rename <path>`, `remove <path>`, `remove variant <Enum>::<Variant>`, `remove field <Type>.<field>`, `change signature of <path>`.
 - **`impact diff`** — the combined blast radius of a unified diff (`git diff | impact diff`, or `impact diff --file some.patch`): every symbol the diff's touched lines fall inside, across every file it mentions, in one call instead of one `impact query` per touched file. Requires the project to be indexed against the diff's *new* side — the working tree as it currently stands, which is what `git diff` on uncommitted changes already matches.
 - **`impact mcp`** — an MCP stdio server exposing `impact_index` / `impact_file` / `impact_change` / `impact_diff` as tools, so an agent can call this directly instead of reading the whole codebase to guess what a change affects.
-- **`impact hook pre-tool-use`** — a Claude Code `PreToolUse` hook: reads the hook payload on stdin and reminds the agent to check blast radius at the two moments the protocol names — the session's first file edit, and any `git commit`. Wired up by `impact install`; a rule can be read once and forgotten, a hook fires whether or not the agent remembered.
+- **`impact hook pre-tool-use`** — a Claude Code `PreToolUse` hook: reads the hook payload on stdin and reminds the agent to check blast radius at the two moments the protocol names — the session's first file edit, and any `git commit`. `impact install` registers it in `settings.json`; a rule can be read once and forgotten, a hook fires whether or not the agent remembered.
 - **Cross-project impact** — register sibling repos in a `workspace.toml` and `--workspace` extends a report with which *other* projects share the same API route / event / table identity, confidence-tiered (`Declared` / `Strong` / `Weak`) so identity coincidences don't masquerade as real dependencies.
 
 Supports Rust, TypeScript/TSX (React), JavaScript/JSX (React Native), Python, Go, Kotlin (Android), and Swift today. The core (`impact-core`) is language-agnostic by design — each language is a pluggable adapter (tree-sitter-based symbol/call extraction), and adding another language means writing one more adapter crate, not touching the engine, linker, or MCP surface. Every adapter after the first (Rust) proved that boundary holds by adding zero lines to `impact-core`.
@@ -140,8 +140,11 @@ Registering the MCP server (above) only gives an agent the *tools*; it still nee
 ```bash
 impact install                 # all four clients, user (global) scope
 impact install --client cursor --scope project
-impact doctor                  # check what's configured and whether the rule is current
+impact install --no-hook       # rule and MCP server only, no Claude Code hook
+impact doctor                  # check what's configured and whether the rule and hook are current
 ```
+
+For Claude Code it also registers a `PreToolUse` hook in `settings.json`, merging into whatever hooks are already there. That is the part that does not depend on the agent remembering anything: the client runs `impact hook pre-tool-use` before the session's first file edit and before any `git commit`, and the reminder comes back as context whether or not the rule above was still in mind. `impact uninstall` removes only impact's own entry.
 
 The rule text `impact install` writes — reproduced here for any other MCP-speaking agent (or CI system prompt) it doesn't have a built-in installer for:
 

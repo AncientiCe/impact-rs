@@ -183,11 +183,16 @@ enum Command {
         /// Skip installing the agent rule file/block.
         #[arg(long)]
         no_rule: bool,
+        /// Skip installing the editor hook (Claude Code only — no other supported client
+        /// has a hook mechanism).
+        #[arg(long)]
+        no_hook: bool,
         /// Print machine-readable JSON instead of a human summary.
         #[arg(long)]
         json: bool,
     },
-    /// Remove the impact MCP server and rule file/block from local AI coding tools.
+    /// Remove the impact MCP server, rule file/block, and editor hook from local AI
+    /// coding tools.
     Uninstall {
         #[arg(long, default_value = "all")]
         client: String,
@@ -203,10 +208,14 @@ enum Command {
         /// Skip removing the agent rule file/block.
         #[arg(long)]
         no_rule: bool,
+        /// Skip removing the editor hook.
+        #[arg(long)]
+        no_hook: bool,
         #[arg(long)]
         json: bool,
     },
-    /// Report whether each AI coding tool has impact registered and its rule installed.
+    /// Report whether each AI coding tool has impact registered, and its rule and hook
+    /// installed.
     Doctor {
         #[arg(long, default_value = "all")]
         client: String,
@@ -344,8 +353,11 @@ fn main() -> anyhow::Result<()> {
             home_dir,
             dry_run,
             no_rule,
+            no_hook,
             json,
-        } => run_install(&client, &scope, path, home_dir, dry_run, no_rule, json),
+        } => run_install(
+            &client, &scope, path, home_dir, dry_run, no_rule, no_hook, json,
+        ),
         Command::Uninstall {
             client,
             scope,
@@ -353,8 +365,11 @@ fn main() -> anyhow::Result<()> {
             home_dir,
             dry_run,
             no_rule,
+            no_hook,
             json,
-        } => run_uninstall(&client, &scope, path, home_dir, dry_run, no_rule, json),
+        } => run_uninstall(
+            &client, &scope, path, home_dir, dry_run, no_rule, no_hook, json,
+        ),
         Command::Doctor {
             client,
             scope,
@@ -501,11 +516,13 @@ fn run_install(
     home_dir: Option<PathBuf>,
     dry_run: bool,
     no_rule: bool,
+    no_hook: bool,
     json: bool,
 ) -> anyhow::Result<()> {
     let mut options = install::build_options(client, scope, path, home_dir)?;
     options.dry_run = dry_run;
     options.install_rule = !no_rule;
+    options.install_hook = !no_hook;
     let report = install::install_clients(&options)?;
     print_install_report(
         if dry_run { "would update" } else { "updated" },
@@ -522,11 +539,13 @@ fn run_uninstall(
     home_dir: Option<PathBuf>,
     dry_run: bool,
     no_rule: bool,
+    no_hook: bool,
     json: bool,
 ) -> anyhow::Result<()> {
     let mut options = install::build_options(client, scope, path, home_dir)?;
     options.dry_run = dry_run;
     options.install_rule = !no_rule;
+    options.install_hook = !no_hook;
     let report = install::uninstall_clients(&options)?;
     print_install_report(
         if dry_run { "would update" } else { "updated" },
@@ -569,6 +588,16 @@ fn run_doctor(
                 "present, out of date"
             };
             println!("  rule:    {} ({})", status.rule_path.display(), rule_state);
+            if let Some(hook_path) = &status.hook_path {
+                let hook_state = if !status.hook_installed {
+                    "missing"
+                } else if status.hook_current {
+                    "up to date"
+                } else {
+                    "present, out of date"
+                };
+                println!("  hook:    {} ({})", hook_path.display(), hook_state);
+            }
         }
     }
     Ok(())
@@ -589,7 +618,11 @@ fn print_install_report(
     for path in &report.rule_changed {
         println!("{action} {}", path.display());
     }
-    if report.changed.is_empty() && report.rule_changed.is_empty() {
+    for path in &report.hook_changed {
+        println!("{action} {}", path.display());
+    }
+    if report.changed.is_empty() && report.rule_changed.is_empty() && report.hook_changed.is_empty()
+    {
         println!("nothing to do — already up to date");
     }
     Ok(())

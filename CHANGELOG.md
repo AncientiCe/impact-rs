@@ -25,6 +25,12 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ### Added
 
+- `impact install` now registers that hook in Claude Code's `settings.json` (user scope
+  `~/.claude/settings.json`, project scope `<project>/.claude/settings.json`) alongside
+  the MCP server and the agent rule, merging into whatever hooks are already there;
+  `impact uninstall` removes only impact's own entry, and `impact doctor` reports whether
+  it is installed and current. `--no-hook` skips it. No other supported client has a hook
+  mechanism, so none of them grow a settings file.
 - `impact hook pre-tool-use`: a Claude Code `PreToolUse` hook that reads the hook payload
   on stdin and returns the protocol as `additionalContext` at the two mechanical
   checkpoints — once on the session's first file edit, and on every `git commit`. Any

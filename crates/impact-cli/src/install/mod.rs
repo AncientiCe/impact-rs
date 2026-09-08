@@ -5,6 +5,7 @@
 
 mod clients;
 mod config_io;
+mod hook;
 mod rule;
 
 use std::path::PathBuf;
@@ -94,6 +95,7 @@ pub struct InstallOptions {
     pub binary_path: PathBuf,
     pub dry_run: bool,
     pub install_rule: bool,
+    pub install_hook: bool,
 }
 
 impl InstallOptions {
@@ -111,6 +113,7 @@ impl InstallOptions {
             binary_path: std::env::current_exe().context("failed to resolve current executable")?,
             dry_run: false,
             install_rule: true,
+            install_hook: true,
         })
     }
 }
@@ -163,6 +166,8 @@ pub struct InstallReport {
     pub unchanged: Vec<PathBuf>,
     pub rule_changed: Vec<PathBuf>,
     pub rule_unchanged: Vec<PathBuf>,
+    pub hook_changed: Vec<PathBuf>,
+    pub hook_unchanged: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -175,6 +180,10 @@ pub struct ClientStatus {
     pub rule_path: PathBuf,
     pub rule_installed: bool,
     pub rule_current: bool,
+    /// `None` for a client with no hook mechanism to install into.
+    pub hook_path: Option<PathBuf>,
+    pub hook_installed: bool,
+    pub hook_current: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -256,6 +265,35 @@ fn uninstall_rule(target: &RuleTarget, dry_run: bool) -> Result<bool> {
     }
 }
 
+/// `Ok(None)` means the client has no hook mechanism, which is not the same as a hook
+/// that was left unchanged — nothing is reported either way.
+fn install_hook(options: &InstallOptions, client: Client) -> Result<Option<(PathBuf, bool)>> {
+    let Some(path) = clients::hook_target(options, client)? else {
+        return Ok(None);
+    };
+    let existing = config_io::read_json_config(&path)?;
+    let mut next = existing.clone();
+    hook::ensure_hook(&mut next, &options.binary_path)?;
+    let changed = config_io::write_json_if_changed(&path, &existing, &next, options.dry_run)?;
+    Ok(Some((path, changed)))
+}
+
+fn uninstall_hook(options: &InstallOptions, client: Client) -> Result<Option<(PathBuf, bool)>> {
+    let Some(path) = clients::hook_target(options, client)? else {
+        return Ok(None);
+    };
+    if !path.exists() {
+        return Ok(Some((path, false)));
+    }
+    let existing = config_io::read_json_config(&path)?;
+    let mut next = existing.clone();
+    if !hook::remove_hook(&mut next) {
+        return Ok(Some((path, false)));
+    }
+    let changed = config_io::write_json_if_changed(&path, &existing, &next, options.dry_run)?;
+    Ok(Some((path, changed)))
+}
+
 pub fn install_clients(options: &InstallOptions) -> Result<InstallReport> {
     let mut report = InstallReport::default();
     for &client in &options.clients {
@@ -273,6 +311,16 @@ pub fn install_clients(options: &InstallOptions) -> Result<InstallReport> {
                 report.rule_changed.push(target.path);
             } else {
                 report.rule_unchanged.push(target.path);
+            }
+        }
+
+        if options.install_hook {
+            if let Some((path, changed)) = install_hook(options, client)? {
+                if changed {
+                    report.hook_changed.push(path);
+                } else {
+                    report.hook_unchanged.push(path);
+                }
             }
         }
     }
@@ -296,6 +344,16 @@ pub fn uninstall_clients(options: &InstallOptions) -> Result<InstallReport> {
                 report.rule_changed.push(target.path);
             } else {
                 report.rule_unchanged.push(target.path);
+            }
+        }
+
+        if options.install_hook {
+            if let Some((path, changed)) = uninstall_hook(options, client)? {
+                if changed {
+                    report.hook_changed.push(path);
+                } else {
+                    report.hook_unchanged.push(path);
+                }
             }
         }
     }
@@ -342,6 +400,18 @@ pub fn doctor(options: &InstallOptions) -> Result<DoctorReport> {
             false
         };
 
+        let hook_path = clients::hook_target(options, client)?;
+        let (hook_installed, hook_current) = match &hook_path {
+            Some(path) => {
+                let settings = config_io::read_json_config(path)?;
+                (
+                    hook::has_hook(&settings),
+                    hook::hook_is_current(&settings, &options.binary_path),
+                )
+            }
+            None => (false, false),
+        };
+
         clients_status.push(ClientStatus {
             client,
             configured: command.is_some(),
@@ -351,6 +421,9 @@ pub fn doctor(options: &InstallOptions) -> Result<DoctorReport> {
             rule_path: target.path,
             rule_installed,
             rule_current,
+            hook_path,
+            hook_installed,
+            hook_current,
         });
     }
     Ok(DoctorReport {
