@@ -87,6 +87,35 @@ fn initialize_and_tools_list_describe_the_server() {
     );
 }
 
+/// impact records the calls it can see syntactically, so a call reached through a
+/// registry/selector indirection, or a function handed over as a value instead of called,
+/// leaves no edge — twice observed producing an empty radius for a symbol that had a real
+/// production consumer. Every query tool must say so, or an agent reads "no dependents" as
+/// "safe to change".
+#[test]
+fn query_tool_descriptions_disclose_the_dynamic_dispatch_blind_spot() {
+    let responses = mcp_round_trip(&[serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/list"
+    })]);
+
+    let tools = responses[0]["result"]["tools"].as_array().unwrap();
+    for name in ["impact_file", "impact_change", "impact_diff"] {
+        let description = tools
+            .iter()
+            .find(|t| t["name"] == name)
+            .and_then(|t| t["description"].as_str())
+            .unwrap_or_else(|| panic!("{name} should be listed with a description"));
+        assert!(
+            description.contains("grep"),
+            "{name} should tell the agent to cross-check by grep: {description}"
+        );
+        assert!(
+            description.contains("as a value"),
+            "{name} should disclose that a function passed as a value leaves no edge: {description}"
+        );
+    }
+}
+
 /// The server's `initialize` instructions must tell agents to run impact analysis not
 /// just before editing but also when proposing a fix concrete enough to state in
 /// `impact_change`'s grammar (rename/remove/signature change), before any code is

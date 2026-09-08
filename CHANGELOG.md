@@ -8,6 +8,10 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ### Changed
 
+- `impact_file`, `impact_change` and `impact_diff` now disclose impact's dynamic-dispatch
+  blind spot in their MCP tool descriptions (and the README): a call reached through a
+  registry/selector indirection, or a function passed as a value rather than called,
+  leaves no edge, so an empty result is not proof that nothing consumes the symbol.
 - Confidence tiers now describe *what evidence* tied a call to a symbol, not just whether
   its name was unique. `Exact` means an import, a declared field/binding type, or a
   same-file declaration ties the call to this symbol; the previously unused `Probable`

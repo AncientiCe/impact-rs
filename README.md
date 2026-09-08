@@ -116,6 +116,8 @@ Unparseable input is a hard error with a usage hint — never a best-effort gues
 | `impact_change` | Blast radius of a `--change`-style description, same `workspace_path`/`min_confidence` support. |
 | `impact_diff` | Blast radius of a unified diff (`diff` argument — the raw text, e.g. `git diff` output), same `workspace_path`/`min_confidence` support. |
 
+Only calls `impact` can see syntactically become edges. A call reached through a registry or selector indirection (`getSelectors(state).canSchedule(...)`), or a function handed to something else as a value (`transform: camelizeOrder`) rather than called, leaves no edge — so an empty or thin blast radius is not proof that nothing consumes the symbol. Cross-check the symbol name with `grep` before concluding a change is safe.
+
 ```bash
 claude mcp add impact -- impact mcp
 ```
