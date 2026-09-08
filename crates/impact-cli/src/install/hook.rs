@@ -48,7 +48,9 @@ fn is_impact_entry(entry: &Value) -> bool {
 }
 
 fn pre_tool_use_entries(settings: &Value) -> Option<&Vec<Value>> {
-    settings.pointer("/hooks/PreToolUse").and_then(Value::as_array)
+    settings
+        .pointer("/hooks/PreToolUse")
+        .and_then(Value::as_array)
 }
 
 pub fn ensure_hook(settings: &mut Value, binary_path: &Path) -> Result<()> {
@@ -70,7 +72,10 @@ pub fn ensure_hook(settings: &mut Value, binary_path: &Path) -> Result<()> {
         .ok_or_else(|| anyhow!("hooks.PreToolUse must be a JSON array"))?;
 
     let entry = impact_entry(binary_path);
-    match entries.iter_mut().find(|existing| is_impact_entry(existing)) {
+    match entries
+        .iter_mut()
+        .find(|existing| is_impact_entry(existing))
+    {
         Some(existing) => *existing = entry,
         None => entries.push(entry),
     }
@@ -128,6 +133,5 @@ pub fn has_hook(settings: &Value) -> bool {
 /// pointing at an older path or an older matcher is installed but not current.
 pub fn hook_is_current(settings: &Value, binary_path: &Path) -> bool {
     let expected = impact_entry(binary_path);
-    pre_tool_use_entries(settings)
-        .is_some_and(|entries| entries.iter().any(|entry| *entry == expected))
+    pre_tool_use_entries(settings).is_some_and(|entries| entries.contains(&expected))
 }

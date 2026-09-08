@@ -85,15 +85,13 @@ fn impact_hook_entries(settings: &Value) -> Vec<&Value> {
             entries
                 .iter()
                 .filter(|entry| {
-                    entry["hooks"]
-                        .as_array()
-                        .is_some_and(|hooks| {
-                            hooks.iter().any(|h| {
-                                h["command"]
-                                    .as_str()
-                                    .is_some_and(|c| c.trim_end().ends_with("hook pre-tool-use"))
-                            })
+                    entry["hooks"].as_array().is_some_and(|hooks| {
+                        hooks.iter().any(|h| {
+                            h["command"]
+                                .as_str()
+                                .is_some_and(|c| c.trim_end().ends_with("hook pre-tool-use"))
                         })
+                    })
                 })
                 .collect()
         })
@@ -308,7 +306,11 @@ fn claude_hook_install_preserves_unrelated_hooks_and_settings() {
         "other-tool stop"
     );
     let pre = settings["hooks"]["PreToolUse"].as_array().unwrap();
-    assert_eq!(pre.len(), 2, "impact's hook should be added, not swapped in");
+    assert_eq!(
+        pre.len(),
+        2,
+        "impact's hook should be added, not swapped in"
+    );
     assert_eq!(pre[0]["hooks"][0]["command"], "other-tool hook");
     assert_eq!(impact_hook_entries(&settings).len(), 1);
 }

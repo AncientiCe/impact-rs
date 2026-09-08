@@ -32,7 +32,10 @@ fn additional_context(output: &std::process::Output) -> String {
             String::from_utf8_lossy(&output.stdout)
         )
     });
-    assert_eq!(response["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+    assert_eq!(
+        response["hookSpecificOutput"]["hookEventName"],
+        "PreToolUse"
+    );
     response["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap_or_else(|| panic!("hook response should carry additionalContext: {response}"))
@@ -57,7 +60,9 @@ fn edit(session: &str) -> String {
 }
 
 fn bash(session: &str, command: &str) -> String {
-    format!(r#"{{"session_id": "{session}", "tool_name": "Bash", "tool_input": {{"command": "{command}"}}}}"#)
+    format!(
+        r#"{{"session_id": "{session}", "tool_name": "Bash", "tool_input": {{"command": "{command}"}}}}"#
+    )
 }
 
 /// The checkpoint the rule names first: the session's first edit, whether or not the
@@ -88,7 +93,7 @@ fn later_edits_in_the_same_session_stay_quiet() {
 
     assert_silent(&run_hook(&edit("session-a"), state.path()));
     assert_silent(&run_hook(
-        &format!(r#"{{"session_id": "session-a", "tool_name": "Write"}}"#),
+        r#"{"session_id": "session-a", "tool_name": "Write"}"#,
         state.path(),
     ));
 }

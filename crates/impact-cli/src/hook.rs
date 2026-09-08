@@ -100,7 +100,11 @@ fn claim_first_edit(session: &str) -> bool {
         return true;
     }
     let marker = dir.join(format!("{}.first-edit", sanitized(session)));
-    match OpenOptions::new().write(true).create_new(true).open(&marker) {
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&marker)
+    {
         Ok(_) => true,
         Err(e) => e.kind() != ErrorKind::AlreadyExists,
     }
