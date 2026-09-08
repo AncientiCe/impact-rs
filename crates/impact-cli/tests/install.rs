@@ -151,6 +151,35 @@ fn installed_rule_has_an_unconditional_session_start_trigger() {
     );
 }
 
+/// "Before renaming, removing, or changing a signature" makes the agent classify its own
+/// change before the trigger can fire — a step it skips exactly when it is moving fast and
+/// the change is riskiest. The rule must also state checkpoints that need no judgment
+/// call: the first edit of a session, and any commit.
+#[test]
+fn installed_rule_states_mechanical_checkpoints() {
+    let home = tempfile::tempdir().unwrap();
+
+    install(home.path(), &[]);
+
+    let rule = fs::read_to_string(rule_path(home.path())).unwrap();
+    let before_editing = rule
+        .split("## BEFORE EDITING")
+        .nth(1)
+        .unwrap_or_else(|| panic!("rule should carry a before-editing trigger: {rule}"));
+    let section = before_editing
+        .split("## AFTER EDITING")
+        .next()
+        .unwrap_or_default();
+    assert!(
+        section.contains("commit"),
+        "the before-editing trigger should fire before any commit: {rule}"
+    );
+    assert!(
+        section.contains("first Edit/Write"),
+        "the before-editing trigger should fire before the session's first edit: {rule}"
+    );
+}
+
 /// The README publishes the rule text for agents `impact install` has no installer for,
 /// claiming it is "exactly what `impact install` generates". It silently drifted out of
 /// date once already; keep the claim true.

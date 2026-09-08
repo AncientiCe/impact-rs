@@ -21,6 +21,11 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ### Added
 
+- The "before editing" trigger in the installed rule and the MCP `initialize`
+  instructions now names two checkpoints that need no judgment call — before the
+  session's first edit and before any commit — alongside the existing rename/remove/
+  signature-change wording, which only fires once the agent has correctly classified its
+  own change.
 - The installed agent rule and the MCP server's `initialize` instructions now carry an
   unconditional `SESSION START` trigger: load impact's tools and run `impact_index` once
   on the project root when a session begins, whether or not the task looks like it will

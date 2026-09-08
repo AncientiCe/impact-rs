@@ -77,7 +77,10 @@ fn initialize_result(protocol_version: &str) -> Value {
             modifying code, call \
             impact_file, impact_change, or impact_diff (given a unified diff) to see what \
             depends on what you're about to change — direct/indirect callers, API routes, \
-            event types, database tables, and affected tests. This also applies before \
+            event types, database tables, and affected tests. Do that at two checkpoints \
+            that need no judgment call — before the session's first edit, and before any \
+            commit — rather than first classifying the change as a rename, a removal or a \
+            signature change. This also applies before \
             proposing a fix: once the proposed fix is concrete enough to state as a \
             rename/remove/signature-change target, run impact analysis before presenting \
             the proposal, even if no code has been written yet — vague, exploratory \

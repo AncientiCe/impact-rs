@@ -131,6 +131,29 @@ fn initialize_instructions_ask_for_an_index_at_session_start() {
     );
 }
 
+/// The server's instructions carry the same mechanical checkpoints as the installed rule:
+/// an agent should not have to classify its own change correctly before the protocol can
+/// fire on it.
+#[test]
+fn initialize_instructions_state_mechanical_checkpoints() {
+    let responses = mcp_round_trip(&[serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2024-11-05"}
+    })]);
+
+    let instructions = responses[0]["result"]["instructions"]
+        .as_str()
+        .expect("initialize result should have instructions");
+    assert!(
+        instructions.contains("commit"),
+        "instructions should ask for analysis before any commit: {instructions}"
+    );
+    assert!(
+        instructions.contains("first edit"),
+        "instructions should ask for analysis before the session's first edit: {instructions}"
+    );
+}
+
 /// An unrecognized JSON-RPC method is a proper JSON-RPC error, not a crash or a silently
 /// dropped request.
 #[test]

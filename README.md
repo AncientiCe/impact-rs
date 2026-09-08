@@ -156,9 +156,11 @@ whether this task will touch code at all.*
   reach for when the triggers below fire, and an unindexed project makes them useless.
 
 ## BEFORE EDITING
-*Before renaming, removing, or changing the signature of any function, type, enum
-variant, or field — or touching code behind an API route, event, or database table. This
-also covers proposing such a change: once your proposed fix is concrete enough to state
+*Two checkpoints that need no judgment call: before the first Edit/Write of a session,
+and before any commit. Beyond those, whenever you rename, remove, or change the signature
+of any function, type, enum variant, or field — or touch code behind an API route, event,
+or database table. Don't wait to classify your own change first; run it and read the
+report. This also covers proposing such a change: once your proposed fix is concrete enough to state
 as a rename/remove/signature-change target, run this before presenting the proposal,
 even if you haven't written any code yet. Vague, exploratory "here's roughly how I'd
 approach it" discussion that hasn't settled on a concrete target doesn't need it.*
