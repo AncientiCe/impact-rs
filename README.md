@@ -43,7 +43,7 @@ Full API/EVENTS/DATABASE contract detection (axum/sqlx/event conventions) is cur
 
 Structural resolution, not a compiler: `impact` parses source with [tree-sitter](https://tree-sitter.github.io/tree-sitter/), extracts symbols and call sites, and resolves references using what the calling file itself says about a name — its `import`/`require`/`use` statements, its own declarations, and the declared type of the field or binding a method is called on — falling back to a bare short name only when none of that ties the call to a specific target. It doesn't type-check, so it can't always tell which of several same-named candidates a call resolves to — when that happens, it reports *all* of them rather than guessing wrong and staying silent. A blast-radius tool should over-report, not under-report: a false positive is visible and easy to dismiss, a false negative is invisible and costs you later.
 
-Every DIRECT/INDIRECT entry carries the confidence behind it, describing *what evidence* tied the call to the symbol: `Exact` when an import, a declared field/binding type, or a same-file declaration did; `Probable` when only a project-unique name did; `Heuristic` when the name was ambiguous, shared by more than one candidate. A multi-hop chain is only as trustworthy as its weakest hop, so a chain's tier is the weakest one along it. Tree-text output tags anything below `Exact` inline (`caller::maybe_this [probable]`, `[heuristic]`); `--min-confidence exact|probable` (CLI) or `min_confidence: "exact"|"probable"` (MCP) drops the weaker tiers when you only want what's well-evidenced.
+Every DIRECT/INDIRECT entry carries the confidence behind it, and a multi-hop chain is only as trustworthy as its weakest hop: `Exact` when an import, a declared field/binding type, or a same-file declaration tied every hop back to what you queried, `Probable` when a hop matched only a project-unique bare name, `Heuristic` when a hop matched a bare short name shared by more than one candidate. Tree-text output tags anything below `Exact` inline (`caller::maybe_this [heuristic]`); `--min-confidence exact|probable` (CLI) or `min_confidence: "exact"|"probable"` (MCP) drops the weaker tiers when you only want what's certain.
 
 ## Installation
 
@@ -113,7 +113,7 @@ Unparseable input is a hard error with a usage hint — never a best-effort gues
 | Tool | Description |
 |---|---|
 | `impact_index` | Index (or re-index) a project. |
-| `impact_file` | Blast radius of a file, optionally extended with `workspace_path` for cross-project matches; `min_confidence: "exact"\|"heuristic"` filters DIRECT/INDIRECT entries. |
+| `impact_file` | Blast radius of a file, optionally extended with `workspace_path` for cross-project matches; `min_confidence: "exact"\|"probable"\|"heuristic"` filters DIRECT/INDIRECT entries. |
 | `impact_change` | Blast radius of a `--change`-style description, same `workspace_path`/`min_confidence` support. |
 | `impact_diff` | Blast radius of a unified diff (`diff` argument — the raw text, e.g. `git diff` output), same `workspace_path`/`min_confidence` support. |
 
