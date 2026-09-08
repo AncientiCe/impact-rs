@@ -4,7 +4,32 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
-## [0.6.0] - 2026-09-08
+## [0.7.0] - 2026-09-08
+
+### Added
+
+- The installed agent rule and the MCP server's `initialize` instructions now carry an
+  unconditional `SESSION START` trigger: load impact's tools and run `impact_index` once
+  on the project root when a session begins, whether or not the task looks like it will
+  touch code. In clients that defer MCP tools behind a tool search, a protocol whose every
+  trigger was conditional never got impact's tools loaded at all, so nothing was there to
+  reach for when a trigger finally fired.
+- The "before editing" trigger in the installed rule and the MCP `initialize`
+  instructions now names two checkpoints that need no judgment call — before the
+  session's first edit and before any commit — alongside the existing rename/remove/
+  signature-change wording, which only fires once the agent has correctly classified its
+  own change.
+- `impact hook pre-tool-use`: a Claude Code `PreToolUse` hook that reads the hook payload
+  on stdin and returns the protocol as `additionalContext` at the two mechanical
+  checkpoints — once on the session's first file edit, and on every `git commit`. Any
+  other payload produces no output and a clean exit, so it never fails the tool call it
+  wraps.
+- `impact install` now registers that hook in Claude Code's `settings.json` (user scope
+  `~/.claude/settings.json`, project scope `<project>/.claude/settings.json`) alongside
+  the MCP server and the agent rule, merging into whatever hooks are already there;
+  `impact uninstall` removes only impact's own entry, and `impact doctor` reports whether
+  it is installed and current. `--no-hook` skips it. No other supported client has a hook
+  mechanism, so none of them grow a settings file.
 
 ### Changed
 
@@ -12,6 +37,11 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   blind spot in their MCP tool descriptions (and the README): a call reached through a
   registry/selector indirection, or a function passed as a value rather than called,
   leaves no edge, so an empty result is not proof that nothing consumes the symbol.
+
+## [0.6.0] - 2026-09-08
+
+### Changed
+
 - Confidence tiers now describe *what evidence* tied a call to a symbol, not just whether
   its name was unique. `Exact` means an import, a declared field/binding type, or a
   same-file declaration ties the call to this symbol; the previously unused `Probable`
@@ -25,28 +55,6 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ### Added
 
-- `impact install` now registers that hook in Claude Code's `settings.json` (user scope
-  `~/.claude/settings.json`, project scope `<project>/.claude/settings.json`) alongside
-  the MCP server and the agent rule, merging into whatever hooks are already there;
-  `impact uninstall` removes only impact's own entry, and `impact doctor` reports whether
-  it is installed and current. `--no-hook` skips it. No other supported client has a hook
-  mechanism, so none of them grow a settings file.
-- `impact hook pre-tool-use`: a Claude Code `PreToolUse` hook that reads the hook payload
-  on stdin and returns the protocol as `additionalContext` at the two mechanical
-  checkpoints — once on the session's first file edit, and on every `git commit`. Any
-  other payload produces no output and a clean exit, so it never fails the tool call it
-  wraps.
-- The "before editing" trigger in the installed rule and the MCP `initialize`
-  instructions now names two checkpoints that need no judgment call — before the
-  session's first edit and before any commit — alongside the existing rename/remove/
-  signature-change wording, which only fires once the agent has correctly classified its
-  own change.
-- The installed agent rule and the MCP server's `initialize` instructions now carry an
-  unconditional `SESSION START` trigger: load impact's tools and run `impact_index` once
-  on the project root when a session begins, whether or not the task looks like it will
-  touch code. In clients that defer MCP tools behind a tool search, a protocol whose every
-  trigger was conditional never got impact's tools loaded at all, so nothing was there to
-  reach for when a trigger finally fired.
 - `describe`/`it`/`test` blocks in a JS/TS test file are now indexed as symbols named
   after their own titles, so an affected test is reported as something you can go and run
   rather than just a file. Lifecycle hooks (`beforeEach` and friends) aren't tests and
