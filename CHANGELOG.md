@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-08
+
 ### Changed
 
 - Confidence tiers now describe *what evidence* tied a call to a symbol, not just whether
@@ -13,6 +15,9 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   A bare name can no longer produce `Exact`, so some dependents that used to be reported
   as `exact` are now reported as `probable`. `--min-confidence probable` and the MCP
   `min_confidence: "probable"` value expose the new tier.
+- The README's resolution and confidence sections now describe the three tiers and the
+  import/declared-type resolution that produces them, instead of the two-tier,
+  resolve-by-name behavior they documented before.
 
 ### Added
 
