@@ -25,6 +25,11 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ### Added
 
+- `impact hook pre-tool-use`: a Claude Code `PreToolUse` hook that reads the hook payload
+  on stdin and returns the protocol as `additionalContext` at the two mechanical
+  checkpoints — once on the session's first file edit, and on every `git commit`. Any
+  other payload produces no output and a clean exit, so it never fails the tool call it
+  wraps.
 - The "before editing" trigger in the installed rule and the MCP `initialize`
   instructions now names two checkpoints that need no judgment call — before the
   session's first edit and before any commit — alongside the existing rename/remove/

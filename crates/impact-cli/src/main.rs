@@ -1,4 +1,5 @@
 mod analytics;
+mod hook;
 mod install;
 mod mcp;
 mod ops;
@@ -148,6 +149,13 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Hook entry point for AI coding tools that run a command around a tool call. Reads
+    /// the client's hook payload on stdin and writes its hook response on stdout — meant
+    /// to be wired up by `impact install`, not run by hand.
+    Hook {
+        #[command(subcommand)]
+        event: HookEvent,
+    },
     /// Run the MCP stdio server, exposing `impact_index`/`impact_file`/`impact_change`/
     /// `impact_diff` as tools for an MCP-speaking agent. Blocks until stdin closes.
     Mcp,
@@ -227,6 +235,13 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum HookEvent {
+    /// Claude Code's `PreToolUse`: reminds the agent to check blast radius before the
+    /// session's first edit, and before any commit.
+    PreToolUse,
 }
 
 /// Times `f`, records a CLI usage event for `command` (client from `IMPACT_CLIENT`,
@@ -318,6 +333,9 @@ fn main() -> anyhow::Result<()> {
                 json,
             )
         }),
+        Command::Hook { event } => match event {
+            HookEvent::PreToolUse => hook::pre_tool_use(),
+        },
         Command::Mcp => mcp::run(),
         Command::Install {
             client,
