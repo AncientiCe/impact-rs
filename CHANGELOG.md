@@ -21,6 +21,12 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ### Added
 
+- The installed agent rule and the MCP server's `initialize` instructions now carry an
+  unconditional `SESSION START` trigger: load impact's tools and run `impact_index` once
+  on the project root when a session begins, whether or not the task looks like it will
+  touch code. In clients that defer MCP tools behind a tool search, a protocol whose every
+  trigger was conditional never got impact's tools loaded at all, so nothing was there to
+  reach for when a trigger finally fired.
 - `describe`/`it`/`test` blocks in a JS/TS test file are now indexed as symbols named
   after their own titles, so an affected test is reported as something you can go and run
   rather than just a file. Lifecycle hooks (`beforeEach` and friends) aren't tests and

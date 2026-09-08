@@ -125,6 +125,56 @@ fn installed_rule_covers_proposing_a_concrete_fix() {
     );
 }
 
+/// Impact's MCP tools are deferred behind a tool search in some clients, so a protocol
+/// whose every trigger is conditional never gets them loaded at all — when a trigger
+/// finally fires there is nothing in the agent's tool set to reach for. The rule
+/// therefore needs one unconditional trigger that loads the tools and indexes the
+/// project up front.
+#[test]
+fn installed_rule_has_an_unconditional_session_start_trigger() {
+    let home = tempfile::tempdir().unwrap();
+
+    install(home.path(), &[]);
+
+    let rule = fs::read_to_string(rule_path(home.path())).unwrap();
+    let session_start = rule
+        .split("## SESSION START")
+        .nth(1)
+        .unwrap_or_else(|| panic!("rule should carry a session-start trigger: {rule}"));
+    let section = session_start
+        .split("## BEFORE EDITING")
+        .next()
+        .unwrap_or_default();
+    assert!(
+        section.contains("impact_index"),
+        "the session-start trigger should index the project: {rule}"
+    );
+}
+
+/// The README publishes the rule text for agents `impact install` has no installer for,
+/// claiming it is "exactly what `impact install` generates". It silently drifted out of
+/// date once already; keep the claim true.
+#[test]
+fn readme_publishes_the_installed_rule_text_verbatim() {
+    let home = tempfile::tempdir().unwrap();
+
+    install_client(home.path(), "codex", &[]);
+
+    let agents_md = fs::read_to_string(home.path().join(".codex").join("AGENTS.md")).unwrap();
+    let body = agents_md
+        .split_once("<!-- BEGIN IMPACT -->\n")
+        .and_then(|(_, rest)| rest.split_once("\n<!-- END IMPACT -->"))
+        .map(|(body, _)| body)
+        .expect("installed AGENTS.md should carry a managed block");
+
+    let readme =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md")).unwrap();
+    assert!(
+        readme.contains(body),
+        "README's quoted rule block is stale; it must match what install writes:\n{body}"
+    );
+}
+
 #[test]
 fn install_merges_into_existing_cursor_config_without_clobbering() {
     let home = tempfile::tempdir().unwrap();

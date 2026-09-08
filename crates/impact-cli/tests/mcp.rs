@@ -111,6 +111,26 @@ fn initialize_instructions_cover_proposing_a_concrete_fix() {
     );
 }
 
+/// Same reason the installed rule carries a `## SESSION START` trigger: clients that
+/// defer MCP tools behind a tool search never load impact's tools if every trigger is
+/// conditional, so the server's own instructions must ask for an index up front rather
+/// than only once an edit is already in flight.
+#[test]
+fn initialize_instructions_ask_for_an_index_at_session_start() {
+    let responses = mcp_round_trip(&[serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2024-11-05"}
+    })]);
+
+    let instructions = responses[0]["result"]["instructions"]
+        .as_str()
+        .expect("initialize result should have instructions");
+    assert!(
+        instructions.contains("session"),
+        "instructions should ask for an index at the start of a session: {instructions}"
+    );
+}
+
 /// An unrecognized JSON-RPC method is a proper JSON-RPC error, not a crash or a silently
 /// dropped request.
 #[test]
