@@ -189,7 +189,8 @@ fn tool_list() -> Value {
                     "cache_dir": {"type": "string", "description": "Where the index cache lives (defaults to <project_path>/.impact)"},
                     "workspace_path": {"type": "string", "description": "Path to a workspace.toml registering sibling projects, to also compute cross-project impact"},
                     "min_confidence": {"type": "string", "enum": ["exact", "probable", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything). exact = an import or declared type ties the call to this symbol; probable = a unique name with no scope evidence; heuristic = an ambiguous name"},
-                    "explain": {"type": "boolean", "description": "Include each INDIRECT entry's chain back to its nearest DIRECT dependent (default: false)"}
+                    "explain": {"type": "boolean", "description": "Include each INDIRECT entry's chain back to its nearest DIRECT dependent (default: false)"},
+                    "summary": {"type": "boolean", "description": "Compact response: exact per-category counts, DIRECT listed in full, INDIRECT grouped and counted by file with only the first few entries shown per group. Use this for a file with many transitive dependents, where the full result risks exceeding the response size limit (default: false)"}
                 },
                 "required": ["path"]
             }
@@ -205,7 +206,8 @@ fn tool_list() -> Value {
                     "cache_dir": {"type": "string", "description": "Where the index cache lives (defaults to <project_path>/.impact)"},
                     "workspace_path": {"type": "string", "description": "Path to a workspace.toml registering sibling projects, to also compute cross-project impact"},
                     "min_confidence": {"type": "string", "enum": ["exact", "probable", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything). exact = an import or declared type ties the call to this symbol; probable = a unique name with no scope evidence; heuristic = an ambiguous name"},
-                    "explain": {"type": "boolean", "description": "Include each INDIRECT entry's chain back to its nearest DIRECT dependent (default: false)"}
+                    "explain": {"type": "boolean", "description": "Include each INDIRECT entry's chain back to its nearest DIRECT dependent (default: false)"},
+                    "summary": {"type": "boolean", "description": "Compact response: exact per-category counts, DIRECT listed in full, INDIRECT grouped and counted by file with only the first few entries shown per group. Use this for a change with many transitive dependents, where the full result risks exceeding the response size limit (default: false)"}
                 },
                 "required": ["description"]
             }
@@ -221,7 +223,8 @@ fn tool_list() -> Value {
                     "cache_dir": {"type": "string", "description": "Where the index cache lives (defaults to <project_path>/.impact)"},
                     "workspace_path": {"type": "string", "description": "Path to a workspace.toml registering sibling projects, to also compute cross-project impact"},
                     "min_confidence": {"type": "string", "enum": ["exact", "probable", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything). exact = an import or declared type ties the call to this symbol; probable = a unique name with no scope evidence; heuristic = an ambiguous name"},
-                    "explain": {"type": "boolean", "description": "Include each INDIRECT entry's chain back to its nearest DIRECT dependent (default: false)"}
+                    "explain": {"type": "boolean", "description": "Include each INDIRECT entry's chain back to its nearest DIRECT dependent (default: false)"},
+                    "summary": {"type": "boolean", "description": "Compact response: exact per-category counts, DIRECT listed in full, INDIRECT grouped and counted by file with only the first few entries shown per group. Use this for a diff with many transitive dependents, where the full result risks exceeding the response size limit (default: false)"}
                 },
                 "required": ["diff"]
             }
@@ -289,6 +292,12 @@ fn explain_arg(args: &Value) -> bool {
         .unwrap_or(false)
 }
 
+fn summary_arg(args: &Value) -> bool {
+    args.get("summary")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 fn ok_or_error<T: serde::Serialize>(result: anyhow::Result<T>) -> Value {
     match result {
         Ok(value) => {
@@ -324,13 +333,13 @@ fn tool_file(args: &Value) -> Value {
         Err(e) => return json!({"error": e}),
     };
     let explain = explain_arg(args);
+    let summary = summary_arg(args);
 
     let result = ops::query_file(&path, project_path.as_deref(), cache_dir.as_deref())
         .map(|local| apply_min_confidence(local, min_confidence))
         .map(|local| impact_core::apply_explain(local, explain))
-        .and_then(|local| {
-            with_workspace(local, project_path.as_deref(), workspace_path.as_deref())
-        });
+        .and_then(|local| with_workspace(local, project_path.as_deref(), workspace_path.as_deref()))
+        .and_then(|(local, cross_project)| finalize_report(local, cross_project, summary));
     ok_or_error(result)
 }
 
@@ -346,13 +355,13 @@ fn tool_change(args: &Value) -> Value {
         Err(e) => return json!({"error": e}),
     };
     let explain = explain_arg(args);
+    let summary = summary_arg(args);
 
     let result = ops::apply_change(&description, project_path.as_deref(), cache_dir.as_deref())
         .map(|local| apply_min_confidence(local, min_confidence))
         .map(|local| impact_core::apply_explain(local, explain))
-        .and_then(|local| {
-            with_workspace(local, project_path.as_deref(), workspace_path.as_deref())
-        });
+        .and_then(|local| with_workspace(local, project_path.as_deref(), workspace_path.as_deref()))
+        .and_then(|(local, cross_project)| finalize_report(local, cross_project, summary));
     ok_or_error(result)
 }
 
@@ -368,27 +377,61 @@ fn tool_diff(args: &Value) -> Value {
         Err(e) => return json!({"error": e}),
     };
     let explain = explain_arg(args);
+    let summary = summary_arg(args);
 
     let result = ops::diff_impact(&diff, project_path.as_deref(), cache_dir.as_deref())
         .map(|local| apply_min_confidence(local, min_confidence))
         .map(|local| impact_core::apply_explain(local, explain))
-        .and_then(|local| {
-            with_workspace(local, project_path.as_deref(), workspace_path.as_deref())
-        });
+        .and_then(|local| with_workspace(local, project_path.as_deref(), workspace_path.as_deref()))
+        .and_then(|(local, cross_project)| finalize_report(local, cross_project, summary));
     ok_or_error(result)
 }
 
-/// Extends a local report with cross-project matches when `workspace_path` was given, or
-/// returns it as-is — both serialized to `Value` here so the two branches unify into one
-/// return type without needing a trait object.
+/// Extends a local report with cross-project matches when `workspace_path` was given —
+/// returns the `ImpactReport` alongside the cross-project matches (if any) rather than a
+/// serialized `Value`, so `finalize_report` can still choose between the full report and
+/// `summarize`'s compact form after this runs.
 fn with_workspace(
     local: impact_core::ImpactReport,
     project_path: Option<&std::path::Path>,
     workspace_path: Option<&std::path::Path>,
-) -> anyhow::Result<Value> {
+) -> anyhow::Result<(
+    impact_core::ImpactReport,
+    Option<Vec<impact_core::CrossProjectMatch>>,
+)> {
     match workspace_path {
         Some(ws) => {
             let report = ops::cross_project_report(local, project_path, ws)?;
+            Ok((report.local, Some(report.cross_project)))
+        }
+        None => Ok((local, None)),
+    }
+}
+
+/// Renders a report (plus any cross-project matches) to the final `Value` a tool call
+/// returns — either the full `ImpactReport`/`WorkspaceImpactReport` shape, or, when
+/// `summary` is set, `impact_core::summarize`'s compact grouped-by-file form with
+/// `cross_project` merged back in alongside it.
+fn finalize_report(
+    local: impact_core::ImpactReport,
+    cross_project: Option<Vec<impact_core::CrossProjectMatch>>,
+    summary: bool,
+) -> anyhow::Result<Value> {
+    if summary {
+        let summary_report =
+            impact_core::summarize(&local, impact_core::DEFAULT_SUMMARY_GROUP_LIMIT);
+        let mut value = serde_json::to_value(&summary_report)?;
+        if let Some(cross_project) = &cross_project {
+            value["cross_project"] = serde_json::to_value(cross_project)?;
+        }
+        return Ok(value);
+    }
+    match cross_project {
+        Some(cross_project) => {
+            let report = impact_core::WorkspaceImpactReport {
+                local,
+                cross_project,
+            };
             Ok(serde_json::to_value(report)?)
         }
         None => Ok(serde_json::to_value(local)?),

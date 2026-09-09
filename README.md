@@ -45,6 +45,8 @@ Structural resolution, not a compiler: `impact` parses source with [tree-sitter]
 
 Every DIRECT/INDIRECT entry carries the confidence behind it, and a multi-hop chain is only as trustworthy as its weakest hop: `Exact` when an import, a declared field/binding type, or a same-file declaration tied every hop back to what you queried, `Probable` when a hop matched only a project-unique bare name, `Heuristic` when a hop matched a bare short name shared by more than one candidate. Tree-text output tags anything below `Exact` inline (`caller::maybe_this [heuristic]`); `--min-confidence exact|probable` (CLI) or `min_confidence: "exact"|"probable"` (MCP) drops the weaker tiers when you only want what's certain.
 
+A symbol with a wide blast radius (a well-used file, a change touching a shared type) can produce hundreds of INDIRECT entries — enough to exceed an MCP client's response size limit on an ordinary query. `--summary` (CLI) or `summary: true` (MCP) trades the full listing for a compact one: exact counts per category, DIRECT entries in full (that bucket is usually small), and INDIRECT entries grouped and counted by file, with only the first few shown inline per file. Opt-in and off by default, the same as `--min-confidence`/`--explain`.
+
 ## Installation
 
 **macOS / Linux (Homebrew):**
@@ -89,9 +91,9 @@ cargo run -p impact-cli -- mcp
 | Command | Description |
 |---|---|
 | `impact index <path> [--force] [--cache-dir <dir>]` | Index (or re-index) a project. `--force` wipes the cache and re-parses everything, ignoring content-hash skips. |
-| `impact query <file> [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|probable\|heuristic] [--json]` | Blast radius of a file. |
-| `impact change "<description>" [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|probable\|heuristic] [--json]` | Blast radius of one symbol-level change. |
-| `impact diff [--file <path>] [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|probable\|heuristic] [--json]` | Blast radius of a unified diff — reads from `--file`, or stdin if omitted. |
+| `impact query <file> [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|probable\|heuristic] [--summary] [--json]` | Blast radius of a file. |
+| `impact change "<description>" [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|probable\|heuristic] [--summary] [--json]` | Blast radius of one symbol-level change. |
+| `impact diff [--file <path>] [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|probable\|heuristic] [--summary] [--json]` | Blast radius of a unified diff — reads from `--file`, or stdin if omitted. |
 | `impact mcp` | Start the MCP stdio server. Blocks until stdin closes. |
 | `impact gain [--daily\|--weekly\|--monthly] [--json]` | Usage analytics for `index`/`query`/`change`/`diff` (CLI and MCP combined), rolled up by day/week/month and broken down by client. Defaults to monthly. Recorded locally to `~/.impact/analytics.sqlite`; disable with `IMPACT_NO_ANALYTICS=1`. |
 
@@ -115,9 +117,9 @@ Unparseable input is a hard error with a usage hint — never a best-effort gues
 | Tool | Description |
 |---|---|
 | `impact_index` | Index (or re-index) a project. |
-| `impact_file` | Blast radius of a file, optionally extended with `workspace_path` for cross-project matches; `min_confidence: "exact"\|"probable"\|"heuristic"` filters DIRECT/INDIRECT entries. |
-| `impact_change` | Blast radius of a `--change`-style description, same `workspace_path`/`min_confidence` support. |
-| `impact_diff` | Blast radius of a unified diff (`diff` argument — the raw text, e.g. `git diff` output), same `workspace_path`/`min_confidence` support. |
+| `impact_file` | Blast radius of a file, optionally extended with `workspace_path` for cross-project matches; `min_confidence: "exact"\|"probable"\|"heuristic"` filters DIRECT/INDIRECT entries; `summary: true` returns the compact grouped-by-file form instead of the full listing. |
+| `impact_change` | Blast radius of a `--change`-style description, same `workspace_path`/`min_confidence`/`summary` support. |
+| `impact_diff` | Blast radius of a unified diff (`diff` argument — the raw text, e.g. `git diff` output), same `workspace_path`/`min_confidence`/`summary` support. |
 
 Only calls `impact` can see syntactically become edges. A call reached through a registry or selector indirection (`getSelectors(state).canSchedule(...)`), or a function handed to something else as a value (`transform: camelizeOrder`) rather than called, leaves no edge — so an empty or thin blast radius is not proof that nothing consumes the symbol. Cross-check the symbol name with `grep` before concluding a change is safe.
 

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
-use impact_core::{Confidence, CrossProjectMatch, ImpactReport};
+use impact_core::{Confidence, CrossProjectMatch, ImpactReport, WorkspaceImpactReport};
 
 /// CLI-facing mirror of `impact_core::Confidence`'s two tiers a user would realistically
 /// filter on. `--min-confidence exact` keeps only unambiguous dependents; the default
@@ -82,6 +82,11 @@ enum Command {
         /// `[heuristic]` entry can be checked without re-reading code.
         #[arg(long)]
         explain: bool,
+        /// Compact output: exact per-category counts, DIRECT listed in full, INDIRECT
+        /// grouped and counted by file with only the first few entries shown per group.
+        /// Opt-in — off by default, same as `--json`/`--explain`/`--min-confidence`.
+        #[arg(long)]
+        summary: bool,
         /// Print machine-readable JSON instead of the tree-text report.
         #[arg(long)]
         json: bool,
@@ -112,6 +117,11 @@ enum Command {
         /// `[heuristic]` entry can be checked without re-reading code.
         #[arg(long)]
         explain: bool,
+        /// Compact output: exact per-category counts, DIRECT listed in full, INDIRECT
+        /// grouped and counted by file with only the first few entries shown per group.
+        /// Opt-in — off by default, same as `--json`/`--explain`/`--min-confidence`.
+        #[arg(long)]
+        summary: bool,
         /// Print machine-readable JSON instead of the tree-text report.
         #[arg(long)]
         json: bool,
@@ -145,6 +155,11 @@ enum Command {
         /// `[heuristic]` entry can be checked without re-reading code.
         #[arg(long)]
         explain: bool,
+        /// Compact output: exact per-category counts, DIRECT listed in full, INDIRECT
+        /// grouped and counted by file with only the first few entries shown per group.
+        /// Opt-in — off by default, same as `--json`/`--explain`/`--min-confidence`.
+        #[arg(long)]
+        summary: bool,
         /// Print machine-readable JSON instead of the tree-text report.
         #[arg(long)]
         json: bool,
@@ -292,6 +307,7 @@ fn main() -> anyhow::Result<()> {
             workspace,
             min_confidence,
             explain,
+            summary,
             json,
         } => with_usage_recorded("file", || {
             run_query(
@@ -301,6 +317,7 @@ fn main() -> anyhow::Result<()> {
                 workspace.as_deref(),
                 min_confidence,
                 explain,
+                summary,
                 json,
             )
         }),
@@ -311,6 +328,7 @@ fn main() -> anyhow::Result<()> {
             workspace,
             min_confidence,
             explain,
+            summary,
             json,
         } => with_usage_recorded("change", || {
             run_change(
@@ -320,6 +338,7 @@ fn main() -> anyhow::Result<()> {
                 workspace.as_deref(),
                 min_confidence,
                 explain,
+                summary,
                 json,
             )
         }),
@@ -330,6 +349,7 @@ fn main() -> anyhow::Result<()> {
             workspace,
             min_confidence,
             explain,
+            summary,
             json,
         } => with_usage_recorded("diff", || {
             run_diff(
@@ -339,6 +359,7 @@ fn main() -> anyhow::Result<()> {
                 workspace.as_deref(),
                 min_confidence,
                 explain,
+                summary,
                 json,
             )
         }),
@@ -636,6 +657,7 @@ fn run_diff(
     workspace: Option<&Path>,
     min_confidence: Option<MinConfidence>,
     explain: bool,
+    summary: bool,
     json: bool,
 ) -> anyhow::Result<()> {
     let diff_text = match file {
@@ -652,7 +674,15 @@ fn run_diff(
     };
 
     let local = ops::diff_impact(&diff_text, project, cache_dir)?;
-    print_report(local, project, workspace, min_confidence, explain, json)
+    print_report(
+        local,
+        project,
+        workspace,
+        min_confidence,
+        explain,
+        summary,
+        json,
+    )
 }
 
 fn run_index(path: &Path, cache_dir: Option<&Path>, force: bool, json: bool) -> anyhow::Result<()> {
@@ -685,10 +715,19 @@ fn run_query(
     workspace: Option<&Path>,
     min_confidence: Option<MinConfidence>,
     explain: bool,
+    summary: bool,
     json: bool,
 ) -> anyhow::Result<()> {
     let local = ops::query_file(path, project, cache_dir)?;
-    print_report(local, project, workspace, min_confidence, explain, json)
+    print_report(
+        local,
+        project,
+        workspace,
+        min_confidence,
+        explain,
+        summary,
+        json,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -699,10 +738,19 @@ fn run_change(
     workspace: Option<&Path>,
     min_confidence: Option<MinConfidence>,
     explain: bool,
+    summary: bool,
     json: bool,
 ) -> anyhow::Result<()> {
     let local = ops::apply_change(description, project, cache_dir)?;
-    print_report(local, project, workspace, min_confidence, explain, json)
+    print_report(
+        local,
+        project,
+        workspace,
+        min_confidence,
+        explain,
+        summary,
+        json,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -712,6 +760,7 @@ fn print_report(
     workspace: Option<&Path>,
     min_confidence: Option<MinConfidence>,
     explain: bool,
+    summary: bool,
     json: bool,
 ) -> anyhow::Result<()> {
     let local = match min_confidence {
@@ -719,7 +768,34 @@ fn print_report(
         None => local,
     };
     let local = impact_core::apply_explain(local, explain);
-    match workspace {
+
+    let (local, cross_project) = match workspace {
+        None => (local, None),
+        Some(workspace_path) => {
+            let report = ops::cross_project_report(local, project, workspace_path)?;
+            (report.local, Some(report.cross_project))
+        }
+    };
+
+    if summary {
+        let summary_report =
+            impact_core::summarize(&local, impact_core::DEFAULT_SUMMARY_GROUP_LIMIT);
+        if json {
+            let mut value = serde_json::to_value(&summary_report)?;
+            if let Some(cross_project) = &cross_project {
+                value["cross_project"] = serde_json::to_value(cross_project)?;
+            }
+            println!("{}", serde_json::to_string_pretty(&value)?);
+        } else {
+            print_summary_tree_text(&summary_report);
+            if let Some(cross_project) = &cross_project {
+                print_cross_project_text(cross_project);
+            }
+        }
+        return Ok(());
+    }
+
+    match &cross_project {
         None => {
             if json {
                 println!("{}", serde_json::to_string_pretty(&local)?);
@@ -727,13 +803,16 @@ fn print_report(
                 print_tree_text(&local);
             }
         }
-        Some(workspace_path) => {
-            let report = ops::cross_project_report(local, project, workspace_path)?;
+        Some(cross_project) => {
             if json {
+                let report = WorkspaceImpactReport {
+                    local,
+                    cross_project: cross_project.clone(),
+                };
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
-                print_tree_text(&report.local);
-                print_cross_project_text(&report.cross_project);
+                print_tree_text(&local);
+                print_cross_project_text(cross_project);
             }
         }
     }
@@ -778,6 +857,53 @@ fn print_tree_text(report: &ImpactReport) {
     println!("TESTS");
     println!("  {} affected tests", report.tests);
     print_dependents(&report.affected_tests);
+}
+
+/// Tree-text rendering of `impact_core::summarize`'s output — see that function's doc for
+/// what gets grouped and why. Every heading carries its true count (`DIRECT (N)`, `API
+/// (N)`, ...) even where the category itself isn't grouped, so a reader never has to count
+/// lines to know how big a bucket really was.
+fn print_summary_tree_text(report: &impact_core::SummaryReport) {
+    println!("DIRECT ({})", report.counts.direct);
+    print_dependents(&report.direct);
+
+    let file_count = report.indirect_by_file.len();
+    println!(
+        "INDIRECT ({} across {file_count} file{})",
+        report.counts.indirect,
+        if file_count == 1 { "" } else { "s" }
+    );
+    for group in &report.indirect_by_file {
+        println!("  {} ({})", group.file, group.count);
+        for d in &group.shown {
+            match d.confidence {
+                Confidence::Exact => println!("    {}  (line {})", d.path, d.line),
+                Confidence::Probable => println!("    {}  (line {}) [probable]", d.path, d.line),
+                Confidence::Heuristic => {
+                    println!("    {}  (line {}) [heuristic]", d.path, d.line)
+                }
+            }
+        }
+        let hidden = group.count - group.shown.len();
+        if hidden > 0 {
+            println!("    ... {hidden} more");
+        }
+    }
+
+    println!("API ({})", report.counts.api);
+    for name in &report.api {
+        println!("  {name}");
+    }
+    println!("EVENTS ({})", report.counts.events);
+    for name in &report.events {
+        println!("  {name}");
+    }
+    println!("DATABASE ({})", report.counts.database);
+    for name in &report.database {
+        println!("  {name}");
+    }
+    println!("TESTS");
+    println!("  {} affected tests", report.counts.tests);
 }
 
 fn print_cross_project_text(matches: &[CrossProjectMatch]) {

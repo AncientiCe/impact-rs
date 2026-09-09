@@ -19,7 +19,8 @@ pub use config::{DetectorConfig, EventStrategy, IndexConfig};
 pub use diff::{parse_unified_diff, DiffTouches};
 pub use engine::{
     apply_explain, compute_change_impact, compute_diff_impact, compute_file_impact,
-    compute_symbol_impact, filter_min_confidence, Dependent, ImpactReport,
+    compute_symbol_impact, filter_min_confidence, summarize, Dependent, ImpactReport,
+    IndirectFileGroup, SummaryCounts, SummaryReport, DEFAULT_SUMMARY_GROUP_LIMIT,
 };
 pub use graph::{Confidence, ContractKind, Edge, EdgeKind, Node, NodeId, NodeKind, SymbolGraph};
 pub use indexer::{IndexStats, Indexer};

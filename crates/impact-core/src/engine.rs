@@ -256,6 +256,99 @@ fn via_chain(
         .collect()
 }
 
+/// How many `Dependent`s a `summarize` file-group shows inline before truncating to just
+/// a count — small enough that a single-file group basically never itself blows a result
+/// size budget, large enough that a group of 2-3 rarely gets truncated at all.
+pub const DEFAULT_SUMMARY_GROUP_LIMIT: usize = 3;
+
+/// Per-category counts of a full `ImpactReport`, kept even where `summarize` otherwise
+/// drops or groups the underlying entries — so a summary never has to be read as "we don't
+/// know how many there really were."
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+pub struct SummaryCounts {
+    pub direct: usize,
+    pub indirect: usize,
+    pub api: usize,
+    pub events: usize,
+    pub database: usize,
+    pub tests: usize,
+}
+
+/// One file's worth of INDIRECT dependents, grouped for `summarize`: `count` is always the
+/// true total for this file, `shown` is capped at the group limit given to `summarize` (in
+/// declaration-line order) regardless of whether truncation happened — comparing
+/// `shown.len()` to `count` tells a caller whether there's more.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct IndirectFileGroup {
+    pub file: String,
+    pub count: usize,
+    pub shown: Vec<Dependent>,
+}
+
+/// A compact rendering of an `ImpactReport`, built for callers where the full report (every
+/// INDIRECT entry listed individually) risks exceeding a result-size budget — an MCP tool
+/// result token cap, a terminal's usable scrollback. Unlike truncating the full report's
+/// JSON/text after the fact, this is computed from the report's own data: every category's
+/// true count survives (`counts`), DIRECT entries stay listed in full (that bucket is
+/// usually small — it's INDIRECT, which fans out per transitive caller, that blows up), and
+/// INDIRECT entries are grouped and counted by file with only the first few shown per
+/// group. Nothing here is invented or guessed at — every number is exact, just aggregated.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SummaryReport {
+    pub counts: SummaryCounts,
+    pub direct: Vec<Dependent>,
+    pub indirect_by_file: Vec<IndirectFileGroup>,
+    pub api: Vec<String>,
+    pub events: Vec<String>,
+    pub database: Vec<String>,
+}
+
+/// Builds a `SummaryReport` from `report`, showing at most `per_file_limit` entries inline
+/// per INDIRECT file group (see `IndirectFileGroup`). Groups are ordered by file path —
+/// alphabetical, not by size — for the same reason every other report in this project is
+/// sorted: the same graph must always produce the same summary.
+pub fn summarize(report: &ImpactReport, per_file_limit: usize) -> SummaryReport {
+    let counts = SummaryCounts {
+        direct: report.direct.len(),
+        indirect: report.indirect.len(),
+        api: report.api.len(),
+        events: report.events.len(),
+        database: report.database.len(),
+        tests: report.tests,
+    };
+
+    let mut by_file: BTreeMap<String, Vec<Dependent>> = BTreeMap::new();
+    for dependent in &report.indirect {
+        by_file
+            .entry(dependent.file.clone())
+            .or_default()
+            .push(dependent.clone());
+    }
+
+    let indirect_by_file = by_file
+        .into_iter()
+        .map(|(file, mut dependents)| {
+            dependents.sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.path.cmp(&b.path)));
+            let count = dependents.len();
+            dependents.truncate(per_file_limit);
+            IndirectFileGroup {
+                file,
+                count,
+                shown: dependents,
+            }
+        })
+        .collect();
+
+    SummaryReport {
+        counts,
+        direct: report.direct.clone(),
+        indirect_by_file,
+        api: report.api.clone(),
+        events: report.events.clone(),
+        database: report.database.clone(),
+    }
+}
+
 /// File-mode query: the blast radius of every symbol declared in `file`.
 pub fn compute_file_impact(graph: &SymbolGraph, file: &str) -> ImpactReport {
     let seeds: HashSet<NodeId> = graph

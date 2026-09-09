@@ -4,6 +4,23 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- `--summary` (CLI: `query`/`change`/`diff`) and `summary: true` (MCP: `impact_file`/
+  `impact_change`/`impact_diff`) — a compact response mode built for a symbol with a wide
+  blast radius, where the full report's per-entry INDIRECT listing risks exceeding an MCP
+  client's response size limit on an ordinary query (observed hitting it repeatedly against
+  a 432-file/~3.2k-symbol Go repo, on entirely normal single-file and 20-file-diff queries).
+  Computed from the report's own data via a new `impact_core::summarize`, not a
+  post-hoc truncation of the full report: every category's true count is preserved
+  (`counts`), DIRECT entries stay listed in full (that bucket is usually small — it's
+  INDIRECT that fans out), and INDIRECT entries are grouped and counted by file
+  (`indirect_by_file`), with only the first 3 shown inline per file. Opt-in and off by
+  default — chosen over making it the default because every other CLI/MCP output knob in
+  this project (`--json`, `--explain`, `--min-confidence`) is opt-in with an unchanged
+  default, and changing the default report shape would silently break existing scripts and
+  JSON consumers parsing `direct`/`indirect` today.
+
 ### Changed
 
 - The `--change`/`impact_change` qualified-path syntax now has a non-Rust worked example
