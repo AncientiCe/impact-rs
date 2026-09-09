@@ -130,12 +130,46 @@ fn change_report(
     spec: &ChangeSpec,
 ) -> anyhow::Result<ImpactReport> {
     impact_core::compute_change_impact(graph, spec).ok_or_else(|| {
+        let target = spec.target_path();
         anyhow::anyhow!(
-            "\"{}\" doesn't resolve to anything in the indexed project — check the path, \
-             or run `impact index` again if the project has changed since the last index",
-            spec.target_path()
+            "\"{target}\" doesn't resolve to anything in the indexed project — check the \
+             path, or run `impact index` again if the project has changed since the last \
+             index{}",
+            bare_name_hint(graph, &target)
         )
     })
+}
+
+/// When a full path fails every tier of `Resolver::resolve` (see its doc comment — exact
+/// qualified path, then last-two-segments, then bare short name), the most common real
+/// cause is a wrong module/package qualifier on an otherwise-correct symbol name: someone
+/// guessed the qualified-path syntax and got the prefix wrong. The resolver's own weakest
+/// tier already has the answer to "is there a symbol with this bare name at all" — reusing
+/// it here turns a dead-end error into a concrete suggestion instead of leaving the caller
+/// to guess a second time.
+///
+/// Returns `""` when `target` has no `::` (the bare-name tier was already tried as part of
+/// the failed resolution itself, so there's nothing more precise left to suggest) or when
+/// even the bare trailing segment doesn't match anything.
+fn bare_name_hint(graph: &impact_core::SymbolGraph, target: &str) -> String {
+    let trailing = target.rsplit("::").next().unwrap_or(target);
+    if trailing == target {
+        return String::new();
+    }
+    let resolver = impact_core::Resolver::build(graph);
+    let Some((ids, _confidence)) = resolver.resolve(trailing) else {
+        return String::new();
+    };
+    let mut names: Vec<&str> = ids
+        .iter()
+        .filter_map(|id| graph.node(id).map(|n| n.qualified_path.as_str()))
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    format!(
+        " — but the bare name {trailing:?} matches: {}",
+        names.join(", ")
+    )
 }
 
 /// Extends `local` with what it touches in other projects registered in the

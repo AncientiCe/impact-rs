@@ -4,6 +4,23 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- The `--change`/`impact_change` qualified-path syntax now has a non-Rust worked example
+  (a Go method reached through nested packages) in both the README's `--change` grammar
+  section and the `impact_change` MCP tool description, plus an explicit note that a
+  filesystem path (`some/file.go::Symbol`) is never a valid qualifier — the only prior
+  example anywhere was Rust-flavored (`rename some::Type::variant`), leaving every other
+  supported language's qualified-path shape to be guessed.
+
+### Fixed
+
+- A `--change`/`impact_change` target that fails to resolve now suggests a bare-name match
+  when one exists, instead of a dead-end "doesn't resolve to anything": if the resolver's
+  weakest tier (short-name-only) finds a symbol for the path's trailing segment, the error
+  now names it — the most common real cause of a failed resolution is a correct symbol
+  name with a wrong module/package qualifier guessed in front of it.
+
 ## [0.7.0] - 2026-09-08
 
 ### Added

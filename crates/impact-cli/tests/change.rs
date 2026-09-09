@@ -165,3 +165,28 @@ fn unresolved_change_target_is_a_clear_error() {
             "doesn't resolve to anything in the indexed project",
         ));
 }
+
+/// A wrong module/package qualifier on an otherwise-correct symbol name (a guess at the
+/// qualified-path syntax that lands on the wrong prefix) is the single most common way a
+/// `--change` path fails to resolve. When that happens, the resolver's own weakest tier —
+/// bare short-name matching — already knows about a plausible target; the error should say
+/// so instead of leaving the caller to guess a second time.
+#[test]
+fn unresolved_change_target_suggests_a_bare_name_match() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    index(&contracts_fixture(), cache_dir.path());
+
+    Command::cargo_bin("impact")
+        .unwrap()
+        .args(["change", "rename wrong::save_payment"])
+        .arg("--project")
+        .arg(contracts_fixture())
+        .arg("--cache-dir")
+        .arg(cache_dir.path())
+        .assert()
+        .failure()
+        .stderr(contains(
+            "doesn't resolve to anything in the indexed project",
+        ))
+        .stderr(contains("repo::save_payment"));
+}

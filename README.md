@@ -108,6 +108,8 @@ change signature of <path>
 
 Unparseable input is a hard error with a usage hint — never a best-effort guess. Determinism is the whole pitch: the same description must always resolve the same way, independent of any model reading it.
 
+`<path>` is a `::`-joined qualified symbol path from the language's own indexed structure — module/package segments followed by the symbol, e.g. Rust's `some::Type::variant` or, for a Go method reached through nested packages, `service::repositories::changes::repository::Repository::AddOperation` (exactly what `impact_file`/`impact query` print in a report's `direct`/`indirect` entries — copy a path from there when unsure). It is never a filesystem path: `some/file.go::Symbol` does not resolve. A shorter form also works — either the last two segments (`Repository::AddOperation`) or just the bare symbol name (`AddOperation`) — but the fewer segments given, the more likely the name matches more than one symbol project-wide, which resolves to all of them at `Heuristic` confidence instead of one `Exact` match.
+
 ## MCP tools
 
 | Tool | Description |
