@@ -32,6 +32,22 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ### Fixed
 
+- The Go adapter now resolves calls through idiomatic dependency-injection selector chains
+  — `uc.ChangesRepository.AddOperation(...)`, where the receiver's field (not the receiver
+  itself) is what carries the type whose method is actually being called. Previously the
+  callee's selector operand was read as flat source text, so a nested selector
+  (`uc.ChangesRepository`) produced the literal string `"uc.ChangesRepository"` — not a
+  name in scope at all — and the call fell all the way through to a bare, `Opaque`-capped
+  short-name match (`Probable` at best), invisible under `--min-confidence exact`.
+  Confirmed via a real dogfooding session against a Go service using this idiom: grep found
+  7 real call sites across 6 files; `impact change` at `--min-confidence exact` found only
+  1 (the same-file one). Fixed by resolving the callee's operand *node*, recursively
+  through as many struct-field hops as the calling file's own declarations can answer
+  (`impact-lang-go`'s new `collect_struct_fields`/`expr_declared_type`), rather than only
+  a plain identifier. Self-measured on a fixture reproducing the exact shape
+  (`tests/fixtures/go_di_fields`): before, 0 dependents at `--min-confidence exact` (1 at
+  `Probable`); after, 1 dependent at `Exact`.
+
 - A `--change`/`impact_change` target that fails to resolve now suggests a bare-name match
   when one exists, instead of a dead-end "doesn't resolve to anything": if the resolver's
   weakest tier (short-name-only) finds a symbol for the path's trailing segment, the error
