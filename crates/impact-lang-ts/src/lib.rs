@@ -50,15 +50,29 @@ use impact_core::{
 };
 use tree_sitter::Node;
 
+mod tsconfig;
+use tsconfig::PathAlias;
+
 const HTTP_VERBS: &[&str] = &["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
 
+#[derive(Default)]
 pub struct TsAdapter {
     config: DetectorConfig,
+    path_aliases: Vec<PathAlias>,
 }
 
 impl TsAdapter {
-    pub fn new(config: DetectorConfig) -> Self {
-        Self { config }
+    /// Reads `tsconfig.json` (falling back to `jsconfig.json`) at `project_root` for
+    /// `compilerOptions.paths`/`baseUrl`, so imports written through a project's own
+    /// module-alias convention (`@scope/*`, or a bare catch-all `"*"`) resolve the same
+    /// way a relative import does. A missing or unparseable config file just means no
+    /// aliases — never a hard error, since most projects have neither.
+    pub fn new(config: DetectorConfig, project_root: &Path) -> Self {
+        let path_aliases = tsconfig::load_path_aliases(project_root);
+        Self {
+            config,
+            path_aliases,
+        }
     }
 
     /// `.ts` gets the plain TypeScript grammar (see the module doc for why); every other
@@ -70,12 +84,6 @@ impl TsAdapter {
         } else {
             tree_sitter_typescript::LANGUAGE_TSX.into()
         }
-    }
-}
-
-impl Default for TsAdapter {
-    fn default() -> Self {
-        Self::new(DetectorConfig::default())
     }
 }
 
@@ -118,7 +126,13 @@ impl LanguageAdapter for TsAdapter {
     fn extract_references(&self, ast: &FileAst) -> Vec<RefDecl> {
         let prefix = module_prefix(&ast.path);
         let source = ast.source.as_bytes();
-        let scope = build_scope(ast.tree.root_node(), source, &ast.path, &prefix);
+        let scope = build_scope(
+            ast.tree.root_node(),
+            source,
+            &ast.path,
+            &prefix,
+            &self.path_aliases,
+        );
         let is_test_file = is_test_file(&ast.path);
         let mut out = Vec::new();
         collect_refs(
@@ -209,28 +223,14 @@ fn push(
     });
 }
 
-/// Resolves an import specifier against the file doing the importing, producing the
-/// module path the imported symbols are indexed under — `'./utils'` in
-/// `src/store/sync/actions.js` becomes `store::sync::utils`.
-///
-/// Only relative specifiers resolve. A bare one (`'react'`, `'@scope/pkg'`) names a
-/// package or a build-tool alias, neither of which this adapter can follow without
-/// reading `tsconfig.json`/`package.json`, so its callers stay unresolved rather than
-/// being pinned to a module that may not be the right one.
-///
-/// Extensions are dropped rather than checked against disk, which also makes this
-/// indifferent to whether `./utils` is `utils.ts`, `utils.js` or `utils/index.ts` — the
-/// linker matches on module segments, and `utils/index.ts` is indexed under a path that
-/// still contains `utils` (see `Resolver::in_module`).
-fn resolve_specifier(importer_path: &str, specifier: &str) -> Option<String> {
-    if !specifier.starts_with('.') {
-        return None;
-    }
-    let importer = importer_path.replace('\\', "/");
-    let mut segments: Vec<&str> = importer.split('/').collect();
-    segments.pop();
-
-    for part in specifier.split('/') {
+/// Joins a `/`-separated relative spec (`./x`, `../y/z`, or an alias target like
+/// `./src/packages/foo`) onto a starting segment list, the same way a filesystem `cd`
+/// would: `.` is a no-op, `..` pops, anything else pushes. Shared by the relative-import
+/// case (starting from the importer's own directory) and alias-target resolution
+/// (starting from `baseUrl`).
+pub(crate) fn join_relative<'a>(base: &[&'a str], spec: &'a str) -> String {
+    let mut segments: Vec<&str> = base.to_vec();
+    for part in spec.split('/') {
         match part {
             "" | "." => {}
             ".." => {
@@ -239,14 +239,40 @@ fn resolve_specifier(importer_path: &str, specifier: &str) -> Option<String> {
             other => segments.push(other),
         }
     }
-
     let joined = segments.join("/");
-    let joined = [".tsx", ".ts", ".jsx", ".mjs", ".js"]
+    [".tsx", ".ts", ".jsx", ".mjs", ".js"]
         .iter()
         .find_map(|ext| joined.strip_suffix(ext))
         .unwrap_or(&joined)
-        .to_string();
-    Some(module_prefix(&joined))
+        .to_string()
+}
+
+/// Resolves an import specifier against the file doing the importing, producing the
+/// module path the imported symbols are indexed under — `'./utils'` in
+/// `src/store/sync/actions.js` becomes `store::sync::utils`.
+///
+/// A relative specifier resolves against the importing file's own directory. A bare one
+/// (`'react'`, `'@newstore/foo'`, or a catch-all-aliased plain name) is tried against
+/// `aliases` (from `tsconfig.json`'s `compilerOptions.paths`, see the `tsconfig` module)
+/// next; a real package name simply won't match any configured pattern and stays
+/// unresolved rather than being pinned to a guess.
+///
+/// Extensions are dropped rather than checked against disk, which also makes this
+/// indifferent to whether `./utils` is `utils.ts`, `utils.js` or `utils/index.ts` — the
+/// linker matches on module segments, and `utils/index.ts` is indexed under a path that
+/// still contains `utils` (see `Resolver::in_module`).
+fn resolve_specifier(
+    importer_path: &str,
+    specifier: &str,
+    aliases: &[PathAlias],
+) -> Option<String> {
+    if specifier.starts_with('.') {
+        let importer = importer_path.replace('\\', "/");
+        let mut base: Vec<&str> = importer.split('/').collect();
+        base.pop();
+        return Some(module_prefix(&join_relative(&base, specifier)));
+    }
+    tsconfig::resolve_alias(specifier, aliases).map(|joined| module_prefix(&joined))
 }
 
 /// Reads this file's imports and its own top-level declarations into a `FileScope`.
@@ -256,19 +282,25 @@ fn resolve_specifier(importer_path: &str, specifier: &str) -> Option<String> {
 /// (destructured or whole). A name that none of them introduce, and that this file
 /// doesn't declare, is `Opaque` — in a module system where cross-file access requires an
 /// import, its absence is real information.
-fn build_scope(root: Node, source: &[u8], file_path: &str, prefix: &str) -> FileScope {
+fn build_scope(
+    root: Node,
+    source: &[u8],
+    file_path: &str,
+    prefix: &str,
+    aliases: &[PathAlias],
+) -> FileScope {
     let mut scope = FileScope::new(prefix, RefTarget::Opaque);
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
         match child.kind() {
             "import_statement" | "export_statement" => {
-                collect_import(child, source, file_path, &mut scope);
+                collect_import(child, source, file_path, aliases, &mut scope);
                 // `export function foo() {}` declares `foo` here as much as a bare
                 // declaration does.
                 declare_locals(child, source, &mut scope);
             }
             "lexical_declaration" | "variable_declaration" => {
-                collect_require(child, source, file_path, &mut scope);
+                collect_require(child, source, file_path, aliases, &mut scope);
                 declare_locals(child, source, &mut scope);
             }
             _ => declare_locals(child, source, &mut scope),
@@ -279,14 +311,20 @@ fn build_scope(root: Node, source: &[u8], file_path: &str, prefix: &str) -> File
 
 /// Records every name an `import`/`export ... from` statement binds, against the module
 /// its specifier resolves to.
-fn collect_import(statement: Node, source: &[u8], file_path: &str, scope: &mut FileScope) {
+fn collect_import(
+    statement: Node,
+    source: &[u8],
+    file_path: &str,
+    aliases: &[PathAlias],
+    scope: &mut FileScope,
+) {
     let Some(specifier) = statement
         .child_by_field_name("source")
         .and_then(|s| ts_string_text(s, source))
     else {
         return;
     };
-    let Some(module) = resolve_specifier(file_path, &specifier) else {
+    let Some(module) = resolve_specifier(file_path, &specifier, aliases) else {
         return;
     };
 
@@ -349,7 +387,13 @@ fn bind_named_imports(list: Node, source: &[u8], module: &str, scope: &mut FileS
 
 /// `const { a, b } = require('./x')` and `const x = require('./x')` — CommonJS, still the
 /// shape a lot of real JavaScript uses.
-fn collect_require(declaration: Node, source: &[u8], file_path: &str, scope: &mut FileScope) {
+fn collect_require(
+    declaration: Node,
+    source: &[u8],
+    file_path: &str,
+    aliases: &[PathAlias],
+    scope: &mut FileScope,
+) {
     let mut cursor = declaration.walk();
     for declarator in declaration.children(&mut cursor) {
         if declarator.kind() != "variable_declarator" {
@@ -358,7 +402,7 @@ fn collect_require(declaration: Node, source: &[u8], file_path: &str, scope: &mu
         let Some(module) = declarator
             .child_by_field_name("value")
             .and_then(|value| require_specifier(value, source))
-            .and_then(|specifier| resolve_specifier(file_path, &specifier))
+            .and_then(|specifier| resolve_specifier(file_path, &specifier, aliases))
         else {
             continue;
         };

@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@newstore/*": ["./src/packages/*"],
+      "@testing/*": ["./src/testing"],
+      "*": ["./src/*"]
+    },
+    // TypeScript 7 no longer picks up node_modules/@types on its own here, so the jest
+    // globals (describe, it, jest) are invisible without this comment-tolerance check.
+    "types": ["jest"]
+  }
+}

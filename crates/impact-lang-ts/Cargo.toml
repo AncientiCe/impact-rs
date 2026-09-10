@@ -17,6 +17,7 @@ path = "src/lib.rs"
 [dependencies]
 impact-core = { path = "../impact-core" }
 anyhow.workspace = true
+serde_json.workspace = true
 tree-sitter.workspace = true
 tree-sitter-typescript.workspace = true
 

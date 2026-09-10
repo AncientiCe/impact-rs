@@ -2,6 +2,24 @@
 
 All notable changes to `impact` are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- `impact-lang-ts` now resolves `tsconfig.json`/`jsconfig.json` path aliases
+  (`compilerOptions.paths`/`baseUrl`), including a bare catch-all `"*"` pattern. Before
+  this, only relative (`./`/`../`) specifiers resolved at all — a real repo's own
+  internal-module convention (`@scope/*` -> `./src/packages/*`, the dominant import style
+  in a React Native monorepo dogfooded against this release) produced a confidently
+  *missing* edge, the same module reported with real dependents when imported relatively
+  and with none when imported through its alias. `TsAdapter::new` now takes the project
+  root and reads the config file itself (JSONC-tolerant — `tsconfig.json` allows `//`/`/*
+  */` comments that plain `serde_json` rejects); a missing or unparseable config file
+  yields no aliases rather than an error, since most projects have neither. `extends` (a
+  base config elsewhere, often inside `node_modules`) is deliberately not followed. New
+  `ts_path_aliases` fixture and 3 behavior tests covering a wildcard-to-wildcard alias, a
+  wildcard pattern with a fixed (non-wildcard) target, and the catch-all `"*"` pattern.
+
 ## [0.8.0] - 2026-09-09
 
 ### Added

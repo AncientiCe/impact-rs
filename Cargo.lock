@@ -496,6 +496,7 @@ version = "0.8.0"
 dependencies = [
  "anyhow",
  "impact-core",
+ "serde_json",
  "tempfile",
  "tree-sitter",
  "tree-sitter-typescript",
