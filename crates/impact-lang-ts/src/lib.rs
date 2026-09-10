@@ -220,6 +220,7 @@ fn push(
         line: node.start_position().row + 1,
         end_line: node.end_position().row + 1,
         is_test,
+        is_generated: false,
     });
 }
 

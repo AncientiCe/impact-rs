@@ -28,6 +28,14 @@ pub struct SymbolDecl {
     /// actually contains it instead of only the nearest preceding declaration.
     pub end_line: usize,
     pub is_test: bool,
+    /// Whether this symbol was declared in a file the adapter recognized as
+    /// tool-generated (Go's standard `// Code generated ... DO NOT EDIT.` marker, so
+    /// far — see `impact-lang-go`). Never a guess: an adapter that can't structurally
+    /// tell always leaves this `false`. Drives `Resolver::in_module` preferring a
+    /// non-generated candidate when a package-scoped call resolves to more than one
+    /// same-named method — a generated mock living beside its real implementation
+    /// shouldn't be what silently downgrades that implementation's own confidence.
+    pub is_generated: bool,
 }
 
 /// How far an adapter could narrow down what a reference's `to_name` actually refers to,

@@ -30,6 +30,14 @@ pub struct Resolver<'g> {
     by_qualified_path: HashMap<&'g str, NodeId>,
     by_last_two_segments: HashMap<String, Vec<NodeId>>,
     by_short_name: HashMap<&'g str, Vec<(&'g str, NodeId)>>,
+    /// Nodes an adapter marked `is_generated` (see `SymbolDecl::is_generated`) — consulted
+    /// only by `in_module`, to keep a generated mock sitting beside its real
+    /// implementation from diluting the real one's confidence on a package-scoped call.
+    /// The plain short-name/last-two-segment tiers above are deliberately left alone:
+    /// they're already the weakest evidence this resolver produces, and a `--change`
+    /// target or a same-file call precisely naming a generated symbol should still find
+    /// it.
+    generated: std::collections::HashSet<NodeId>,
 }
 
 impl<'g> Resolver<'g> {
@@ -37,8 +45,12 @@ impl<'g> Resolver<'g> {
         let mut by_qualified_path = HashMap::new();
         let mut by_last_two_segments: HashMap<String, Vec<NodeId>> = HashMap::new();
         let mut by_short_name: HashMap<&str, Vec<(&str, NodeId)>> = HashMap::new();
+        let mut generated = std::collections::HashSet::new();
 
         for node in graph.nodes() {
+            if node.is_generated {
+                generated.insert(node.id.clone());
+            }
             // `Module` is deliberately excluded: this project doesn't emit any today
             // (see `impact-lang-rust`'s module-prefix comment), and admitting it would
             // let a bare crate-root reference resolve to noise. Every other kind is a
@@ -70,6 +82,7 @@ impl<'g> Resolver<'g> {
             by_qualified_path,
             by_last_two_segments,
             by_short_name,
+            generated,
         }
     }
 
@@ -151,7 +164,7 @@ impl<'g> Resolver<'g> {
             return Vec::new();
         };
         let wanted: Vec<&str> = module.split("::").filter(|s| !s.is_empty()).collect();
-        candidates
+        let matched: Vec<NodeId> = candidates
             .iter()
             .filter(|(path, _)| {
                 let segments: Vec<&str> = path.split("::").collect();
@@ -162,7 +175,32 @@ impl<'g> Resolver<'g> {
                     .is_some_and(|end| contains_run(&segments[..end], &wanted))
             })
             .map(|(_, id)| id.clone())
-            .collect()
+            .collect();
+
+        // A generated mock living in the same package as the real implementation it
+        // mocks (Go's own `mockgen` convention: `interface_mock.go` beside
+        // `interface.go`) matches this same module+name lookup and, left in, downgrades
+        // the real implementation's own confidence from Exact to Probable on every call
+        // reached through its interface — see `SymbolDecl::is_generated`. Preferring the
+        // non-generated subset (when there is one) fixes that without touching a query
+        // whose only candidates happen to be generated.
+        // A generated mock living in the same package as the real implementation it
+        // mocks (Go's own `mockgen` convention: `interface_mock.go` beside
+        // `interface.go`) matches this same module+name lookup and, left in, downgrades
+        // the real implementation's own confidence from Exact to Probable on every call
+        // reached through its interface — see `SymbolDecl::is_generated`. Preferring the
+        // non-generated subset (when there is one) fixes that without touching a query
+        // whose only candidates happen to be generated.
+        let non_generated: Vec<NodeId> = matched
+            .iter()
+            .filter(|id| !self.generated.contains(id))
+            .cloned()
+            .collect();
+        if non_generated.is_empty() {
+            matched
+        } else {
+            non_generated
+        }
     }
 }
 

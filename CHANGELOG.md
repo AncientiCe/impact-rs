@@ -20,6 +20,26 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   `ts_path_aliases` fixture and 3 behavior tests covering a wildcard-to-wildcard alias, a
   wildcard pattern with a fixed (non-wildcard) target, and the catch-all `"*"` pattern.
 
+- A generated mock (`mockgen`'s `interface_mock.go`, or any other tool following Go's
+  standard `// Code generated ... DO NOT EDIT.` convention) living beside the real
+  implementation it mocks no longer dilutes that implementation's own confidence.
+  Reproduced from a real checkout service: an interface-typed field calling a method
+  reached only through its package (the common cross-package DI shape — `resolve_ref`'s
+  `RefTarget::Module` path) resolved to *every* same-named method in that package,
+  generated mock included, downgrading the one real implementation's confidence from
+  `Exact` to `Probable` — invisible at `--min-confidence exact`, the level this project's
+  own Impact protocol tells an agent to trust before editing. Confirmed against the real
+  repo: `impact change` on `HTTPRepository.Notify` at `--min-confidence exact` reported an
+  empty blast radius despite one real production caller. `SymbolDecl`/`Node` gain
+  `is_generated` (only `impact-lang-go` sets it so far, via the same marker comment every
+  Go codegen tool emits — never a name-based guess); `Resolver::in_module` now prefers the
+  non-generated subset of a module-scoped name match when there is one, falling back to
+  the full set when every candidate happens to be generated. Deliberately scoped to
+  `in_module` only — the plain short-name/last-two-segment tiers, and a same-package call
+  that already resolves precisely to a generated symbol, are untouched. Cache schema
+  bumped to v5 for the new column. New `go_generated_mock` fixture (interface + real impl
+  + generated mock, cross-package caller) and 2 behavior tests.
+
 ## [0.8.0] - 2026-09-09
 
 ### Added

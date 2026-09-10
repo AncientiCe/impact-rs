@@ -157,6 +157,7 @@ fn push(
         line: node.start_position().row + 1,
         end_line: node.end_position().row + 1,
         is_test,
+        is_generated: false,
     });
 }
 
@@ -171,6 +172,7 @@ fn push_contract(out: &mut Vec<SymbolDecl>, kind: ContractKind, name: &str, node
         line: node.start_position().row + 1,
         end_line: node.end_position().row + 1,
         is_test: false,
+        is_generated: false,
     });
 }
 

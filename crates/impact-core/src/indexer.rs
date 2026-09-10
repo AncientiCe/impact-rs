@@ -104,6 +104,7 @@ impl<'a> Indexer<'a> {
                     end_line: decl.end_line,
                     language: adapter.language_id().to_string(),
                     is_test: decl.is_test,
+                    is_generated: decl.is_generated,
                 })
                 .collect();
 
@@ -163,6 +164,7 @@ impl<'a> Indexer<'a> {
                 end_line: 0,
                 language: String::new(),
                 is_test: false,
+                is_generated: false,
             };
             graph.insert_node(node.clone());
             synthesized.push(node);
