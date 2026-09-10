@@ -703,6 +703,15 @@ fn run_index(path: &Path, cache_dir: Option<&Path>, force: bool, json: bool) -> 
             stats.symbols_indexed,
             stats.duration_ms
         );
+        for orphan in &stats.orphaned_events {
+            let lost = match (orphan.lost_producer, orphan.lost_consumer) {
+                (true, true) => "lost its last producer and consumer",
+                (true, false) => "lost its last producer",
+                (false, true) => "lost its last consumer",
+                (false, false) => unreachable!("event_diff only reports an actual loss"),
+            };
+            println!("  warning: event {} {lost}", orphan.event);
+        }
     }
     Ok(())
 }

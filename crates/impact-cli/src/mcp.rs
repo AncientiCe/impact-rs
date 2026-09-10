@@ -167,7 +167,7 @@ fn tool_list() -> Value {
     json!([
         {
             "name": "impact_index",
-            "description": "Index a project (or re-index it) so impact_file and impact_change have something to query. Call this once per project before the first query, and again whenever the project has changed since the last index.",
+            "description": "Index a project (or re-index it) so impact_file and impact_change have something to query. Call this once per project before the first query, and again whenever the project has changed since the last index. The result's orphaned_events lists any event contract that had both a producer and a consumer on the previous index and lost one of them on this one — worth a second look (not proof of a mistake) since it's the shape a producer-to-direct-call migration takes when the replacement forgets behavior the old consumer had.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

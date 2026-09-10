@@ -8,9 +8,9 @@ use ignore::WalkBuilder;
 
 use crate::adapter::LanguageAdapter;
 use crate::cache::Cache;
-use crate::graph::{ContractKind, Node, NodeId, NodeKind};
+use crate::graph::{ContractKind, Edge, EdgeKind, Node, NodeId, NodeKind, SymbolGraph};
 
-#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct IndexStats {
     pub files_indexed: usize,
     pub files_skipped: usize,
@@ -19,7 +19,84 @@ pub struct IndexStats {
     /// which only describe files this run actually found.
     pub files_pruned: usize,
     pub symbols_indexed: usize,
+    /// An event contract that had at least one producer *and* one consumer before this
+    /// run and lost one of those sides on this run — see `event_wiring`. Not proof of a
+    /// mistake (removing an event's last producer is often exactly the point of a
+    /// change), but worth a second look: this is the shape a producer-to-direct-call
+    /// migration takes when the replacement forgets behavior the old consumer had.
+    pub orphaned_events: Vec<OrphanedEvent>,
     pub duration_ms: u128,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct OrphanedEvent {
+    pub event: String,
+    pub lost_producer: bool,
+    pub lost_consumer: bool,
+}
+
+/// Whether each `Event` contract declared in `graph` currently has at least one
+/// `Produces` edge and at least one `Consumes` edge pointing at it, among `edges`.
+/// `edges` is taken separately rather than read off `graph.edges()` because the graph
+/// loaded fresh from the cache still carries the *previous* run's persisted edges until
+/// `Cache::replace_edges` overwrites them — using the freshly linked set here keeps this
+/// answering "right now", not "as of the last completed run". Contracts with neither
+/// reachable (declared but never produced or consumed) are included too, as
+/// `(false, false)` — a baseline `event_diff` can still detect against.
+fn event_wiring(
+    graph: &SymbolGraph,
+    edges: &[Edge],
+) -> std::collections::HashMap<String, (bool, bool)> {
+    let mut wiring: std::collections::HashMap<String, (bool, bool)> = graph
+        .nodes()
+        .filter(|n| matches!(n.kind, NodeKind::Contract(ContractKind::Event)))
+        .map(|n| (n.qualified_path.clone(), (false, false)))
+        .collect();
+    for edge in edges {
+        if !matches!(edge.kind, EdgeKind::Produces | EdgeKind::Consumes) {
+            continue;
+        }
+        let Some(target) = graph.node(&edge.to) else {
+            continue;
+        };
+        if !matches!(target.kind, NodeKind::Contract(ContractKind::Event)) {
+            continue;
+        }
+        let entry = wiring.entry(target.qualified_path.clone()).or_default();
+        match edge.kind {
+            EdgeKind::Produces => entry.0 = true,
+            EdgeKind::Consumes => entry.1 = true,
+            _ => unreachable!(),
+        }
+    }
+    wiring
+}
+
+/// Diffs two `event_wiring` snapshots: an event that had both a producer and a consumer
+/// `before` and is missing one of those `after` is reported, naming which side it lost.
+/// An event absent from `after` entirely (its declaration itself was removed) counts as
+/// having lost both.
+fn event_diff(
+    before: &std::collections::HashMap<String, (bool, bool)>,
+    after: &std::collections::HashMap<String, (bool, bool)>,
+) -> Vec<OrphanedEvent> {
+    let mut out: Vec<OrphanedEvent> = before
+        .iter()
+        .filter(|(_, (had_producer, had_consumer))| *had_producer && *had_consumer)
+        .filter_map(|(event, _)| {
+            let (has_producer, has_consumer) = after.get(event).copied().unwrap_or((false, false));
+            if has_producer && has_consumer {
+                return None;
+            }
+            Some(OrphanedEvent {
+                event: event.clone(),
+                lost_producer: !has_producer,
+                lost_consumer: !has_consumer,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| a.event.cmp(&b.event));
+    out
 }
 
 /// Walks a project, routes each file to whichever registered adapter claims it, and
@@ -50,6 +127,14 @@ impl<'a> Indexer<'a> {
     pub fn index(&self, project_root: &Path, cache: &mut Cache) -> Result<IndexStats> {
         let start = Instant::now();
         let mut stats = IndexStats::default();
+
+        // Snapshotted before any file in this run is touched, so a file this run
+        // re-indexes can't already reflect its own change by the time it's compared
+        // against — see `event_diff` at the end of this function. This is the one place
+        // `graph.edges()` is the right source: it's read before this run has changed
+        // anything, so it genuinely is the previous run's fully-committed state.
+        let before_graph = cache.load_graph()?;
+        let events_before = event_wiring(&before_graph, before_graph.edges());
 
         let routed = self.build_routes()?;
         let exclude = self.build_exclude()?;
@@ -175,6 +260,8 @@ impl<'a> Indexer<'a> {
 
         let edges = crate::linker::link(&graph, &all_refs, &all_contract_refs);
         cache.replace_edges(&edges)?;
+
+        stats.orphaned_events = event_diff(&events_before, &event_wiring(&graph, &edges));
 
         stats.duration_ms = start.elapsed().as_millis();
         Ok(stats)

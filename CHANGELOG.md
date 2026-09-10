@@ -4,6 +4,25 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- `impact index`/`impact_index` now reports `orphaned_events`: any event contract that had
+  both a producer and a consumer on the previous index and lost one of those sides on this
+  one. Motivated by a real incident this project can't structurally catch in full (an
+  event-based document-notification path replaced by a direct HTTP call whose new handler
+  silently dropped a field the old consumer always set) — this doesn't detect that kind of
+  behavioral-equivalence gap, only the narrower, mechanically-detectable precursor most
+  such migrations share: the old event losing its last producer or consumer. Not proof of
+  a mistake (removing an event's last producer is often exactly the point of a change) —
+  a second-look signal, printed as a `warning:` line in tree-text output and returned as
+  structured `{event, lost_producer, lost_consumer}` entries in JSON/MCP output. Computed
+  by diffing `Produces`/`Consumes` wiring against a snapshot of the graph taken before this
+  run touches anything, so it fires exactly once, on the transition, not on every
+  subsequent index. `IndexStats` is no longer `Copy` (it now owns a `Vec`). New
+  `event_orphan` fixture and 1 behavior test (indexing three times: once with the event
+  fully wired, once right after its producer is removed, once more to confirm the warning
+  doesn't linger).
+
 ### Fixed
 
 - `impact-lang-ts` now resolves `tsconfig.json`/`jsconfig.json` path aliases
