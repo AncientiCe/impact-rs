@@ -21,13 +21,14 @@
 //!
 //! Deliberately scoped down relative to `impact-lang-rust`: functions, classes, and
 //! methods (`extract_symbols`), and calls including simple method calls
-//! (`extract_references`). An `interface`'s `method_signature` members are indexed the
-//! same way a class's methods are (nested under the interface's own name), so a call on a
-//! value typed only by an interface — never implemented as a class in this file, e.g. a
-//! hand-typed binding to code this adapter can't see into — still resolves through the
-//! same module+name matching a class method would; a `property_signature` typed with a
-//! function type (`foo: (x) => T`, as opposed to shorthand `foo(x): T`) is not covered by
-//! this yet. A named function-scope isn't only `function foo() {}` —
+//! (`extract_references`). An `interface`'s callable members — shorthand `method_signature`
+//! (`foo(x): T`) and a `property_signature` typed with a function type (`foo: (x) => T`,
+//! detected by inspecting its type annotation; a plain data property like `name: string`
+//! isn't a symbol) — are indexed the same way a class's methods are (nested under the
+//! interface's own name), so a call on a value typed only by an interface — never
+//! implemented as a class in this file, e.g. a hand-typed binding to code this adapter
+//! can't see into — still resolves through the same module+name matching a class method
+//! would. A named function-scope isn't only `function foo() {}` —
 //! `const foo = () => {}` and `const foo = function () {}` count too (see
 //! `push_fn_valued_declarators`/`collect_refs_fn_valued_declarators`), since that's the
 //! dominant style for React/React Native components and hooks; an unnamed arrow/function
@@ -191,6 +192,21 @@ fn join_path(prefix: &str, name: &str) -> String {
 
 fn field_text<'a>(node: Node, field: &str, source: &'a [u8]) -> Option<&'a str> {
     node.child_by_field_name(field)?.utf8_text(source).ok()
+}
+
+/// Whether an `interface_body` member is a callable worth indexing as a symbol: a
+/// shorthand `method_signature` (`greet(x): T`) always is; a `property_signature` only is
+/// when its own type annotation is itself a `function_type` (`farewell: (x) => T`) — a
+/// plain data property (`name: string`) has no call-target to index and stays a non-event.
+fn is_callable_interface_member(member: Node) -> bool {
+    match member.kind() {
+        "method_signature" => true,
+        "property_signature" => member
+            .child_by_field_name("type")
+            .and_then(|annotation| annotation.named_child(0))
+            .is_some_and(|inner| inner.kind() == "function_type"),
+        _ => false,
+    }
 }
 
 /// Whether every function/method declared in this file should be marked a test, by the
@@ -609,7 +625,7 @@ fn walk(node: Node, source: &[u8], prefix: &str, is_test_file: bool, out: &mut V
                         let new_prefix = join_path(prefix, name);
                         let mut inner = body.walk();
                         for member in body.children(&mut inner) {
-                            if member.kind() == "method_signature" {
+                            if is_callable_interface_member(member) {
                                 if let Some(method_name) = field_text(member, "name", source) {
                                     push(
                                         out,

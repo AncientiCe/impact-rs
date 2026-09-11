@@ -42,21 +42,26 @@ fn query(cache_dir: &Path, file: &str) -> Value {
 }
 
 /// Regression fixture for a blind spot in `impact-lang-ts`'s symbol extraction: a TS
-/// `interface`'s members (`method_signature`) were never indexed as symbols — only
-/// `class_declaration` methods, `function_declaration`s, and function-valued variables
-/// were. Any value whose shape is described by an `interface` rather than implemented as
-/// a class (a common shape for hand-typed service objects, ports, or bindings to code
-/// this adapter can't see into) was therefore invisible on the receiving end of a method
-/// call: the callee name never existed in the graph under that module, so the resolver's
-/// module+name lookup came up empty and the edge was silently dropped — indistinguishable
-/// from an import that resolved outside the project entirely.
+/// `interface`'s members were never indexed as symbols — only `class_declaration` methods,
+/// `function_declaration`s, and function-valued variables were. Any value whose shape is
+/// described by an `interface` rather than implemented as a class (a common shape for
+/// hand-typed service objects, ports, or bindings to code this adapter can't see into) was
+/// therefore invisible on the receiving end of a method call: the callee name never
+/// existed in the graph under that module, so the resolver's module+name lookup came up
+/// empty and the edge was silently dropped — indistinguishable from an import that
+/// resolved outside the project entirely.
 ///
-/// `service.ts` declares `interface Greeter { greet(...) }` and default-exports a value
-/// typed by it; `consumer.ts` imports that value and calls `.greet(...)` on it. Querying
-/// `service.ts` should surface `consumer.ts` as a DIRECT caller through the interface
-/// method, the same way a class method already would.
+/// Interface members come in two shapes: shorthand `method_signature` (`greet(x): T`) and
+/// `property_signature` typed with a function type (`farewell: (x) => T`) — the latter is
+/// indistinguishable from a non-callable property (`name: string`) without inspecting its
+/// type annotation, so only a `property_signature` whose type is a `function_type` counts.
+///
+/// `service.ts` declares `interface Greeter { greet(...); farewell: (...) => ... }` and
+/// default-exports a value typed by it; `consumer.ts` imports that value and calls both
+/// members on it. Querying `service.ts` should surface both call sites as DIRECT callers,
+/// the same way a class's methods already would.
 #[test]
-fn interface_method_callers_are_resolved() {
+fn interface_method_and_function_typed_property_callers_are_resolved() {
     let cache_dir = tempfile::tempdir().unwrap();
     let stats = index(cache_dir.path());
     assert_eq!(stats["files_indexed"], 2);
@@ -67,6 +72,7 @@ fn interface_method_callers_are_resolved() {
         report["direct"],
         serde_json::json!([
             {"path": "consumer::run", "file": "consumer.ts", "line": 3, "confidence": "Exact"},
+            {"path": "consumer::runFarewell", "file": "consumer.ts", "line": 7, "confidence": "Exact"},
         ])
     );
 }
