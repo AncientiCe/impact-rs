@@ -2,6 +2,27 @@
 
 All notable changes to `impact` are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- `impact-lang-ts`'s symbol extraction (`walk`) now finds a named function/arrow/expression
+  declared *inside* another function's body — a local helper closure, e.g.
+  `function outer() { const helper = () => {...} }` — instead of stopping after one level.
+  Call extraction (`collect_refs`) already recursed into every function body and attributed
+  a nested helper's own calls to a flat `file_prefix::helper` qualified path (never truly
+  nested through intermediate scopes, regardless of depth); `walk` never created that same
+  symbol, so the linker's caller-side lookup failed and the whole call was silently
+  dropped — independent of whether the callee itself resolved. This was a significant,
+  general false-negative (a named local helper closure is a common pattern in async
+  React/React Native code) that could leave a real call with zero chance of ever appearing
+  as a dependent. `class_declaration`/`interface_declaration` bodies keep their existing
+  nested-prefix handling; a test file's `describe`/`it` blocks are still handled entirely
+  by `walk_test_blocks`, which already fully recurses on its own. New
+  `ts_nested_helper_functions` fixture and 1 behavior test. Verified against a real
+  production repo where this was originally found: three real call sites that `impact_file`
+  previously reported as zero consumers now resolve at `Exact` confidence.
+
 ## [0.9.1] - 2026-09-11
 
 ### Fixed

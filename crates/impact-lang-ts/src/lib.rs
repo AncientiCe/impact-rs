@@ -590,11 +590,24 @@ fn sanitize_block_title(title: &str) -> String {
     title.replace("::", ":")
 }
 
-/// Walks top-level declarations (transparently unwrapping `export`/`export default`) and
-/// class bodies, extracting one `SymbolDecl` per function, class, and method. Doesn't
-/// descend into function bodies — nested declarations are out of scope, matching
-/// `impact-lang-rust`'s `walk`. `is_test_file` marks every function/method `is_test`
-/// (never a class itself) — see `is_test_file`'s own doc for the convention.
+/// Walks declarations at any depth (transparently unwrapping `export`/`export default`),
+/// extracting one `SymbolDecl` per function, class, method, and interface member —
+/// including a named function/arrow/expression declared *inside* another function's body
+/// (a local helper closure, e.g. `function outer() { const helper = () => {...} }`).
+/// `collect_refs` already recurses into every function body unconditionally and attributes
+/// a nested named helper's own calls to a flat `prefix::helper` qualified path (never truly
+/// nested through intermediate scopes, regardless of depth) — this walk matches that same
+/// scheme, registering each such helper under the *same* `prefix` it was called with rather
+/// than a nested one, so the two passes agree on what `helper`'s qualified path is. Without
+/// this, `collect_refs` names a caller that `extract_symbols` never created, and the
+/// linker's `from`-side lookup fails, silently dropping the whole call — regardless of
+/// whether the callee resolves. `class_declaration`/`interface_declaration` bodies are the
+/// one case with a genuinely nested prefix (the class/interface name), handled by
+/// recursing explicitly with `new_prefix` instead of falling into the generic recursion
+/// below. `is_test_file` marks every function/method `is_test` (never a class itself) —
+/// see `is_test_file`'s own doc for the convention; a test file's `describe`/`it` blocks
+/// are handled entirely by `walk_test_blocks` instead (its own full recursion), so this
+/// walk doesn't also descend into them generically once it hands off to that.
 fn walk(node: Node, source: &[u8], prefix: &str, is_test_file: bool, out: &mut Vec<SymbolDecl>) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -612,6 +625,7 @@ fn walk(node: Node, source: &[u8], prefix: &str, is_test_file: bool, out: &mut V
                         walk(body, source, &new_prefix, is_test_file, out);
                     }
                 }
+                continue;
             }
             "method_definition" => {
                 if let Some(name) = field_text(child, "name", source) {
@@ -640,19 +654,25 @@ fn walk(node: Node, source: &[u8], prefix: &str, is_test_file: bool, out: &mut V
                         }
                     }
                 }
+                continue;
             }
             "lexical_declaration" | "variable_declaration" => {
                 push_fn_valued_declarators(child, source, prefix, is_test_file, out);
                 push_call_valued_declarators(child, source, prefix, is_test_file, out);
             }
-            "export_statement" => {
-                // `export function foo() {}` / `export class X {}` wrap the real
-                // declaration one level down — unwrap transparently, same prefix.
-                walk(child, source, prefix, is_test_file, out);
+            _ if is_test_file => {
+                walk_test_blocks(child, source, prefix, out);
+                continue;
             }
-            _ if is_test_file => walk_test_blocks(child, source, prefix, out),
             _ => {}
         }
+        // Keep descending with the same `prefix` regardless of what (if anything) this
+        // child was — this is what reaches a named helper nested inside a function body,
+        // an `if`/`try` block, or any other depth, instead of stopping after one level.
+        // `export_statement` (`export function foo() {}`) needs no special unwrap arm any
+        // more: it isn't matched above, so it falls straight through to this same
+        // recursion, same as it would if we'd special-cased it.
+        walk(child, source, prefix, is_test_file, out);
     }
 }
 
