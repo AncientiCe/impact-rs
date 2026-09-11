@@ -21,7 +21,13 @@
 //!
 //! Deliberately scoped down relative to `impact-lang-rust`: functions, classes, and
 //! methods (`extract_symbols`), and calls including simple method calls
-//! (`extract_references`). A named function-scope isn't only `function foo() {}` —
+//! (`extract_references`). An `interface`'s `method_signature` members are indexed the
+//! same way a class's methods are (nested under the interface's own name), so a call on a
+//! value typed only by an interface — never implemented as a class in this file, e.g. a
+//! hand-typed binding to code this adapter can't see into — still resolves through the
+//! same module+name matching a class method would; a `property_signature` typed with a
+//! function type (`foo: (x) => T`, as opposed to shorthand `foo(x): T`) is not covered by
+//! this yet. A named function-scope isn't only `function foo() {}` —
 //! `const foo = () => {}` and `const foo = function () {}` count too (see
 //! `push_fn_valued_declarators`/`collect_refs_fn_valued_declarators`), since that's the
 //! dominant style for React/React Native components and hooks; an unnamed arrow/function
@@ -594,6 +600,29 @@ fn walk(node: Node, source: &[u8], prefix: &str, is_test_file: bool, out: &mut V
             "method_definition" => {
                 if let Some(name) = field_text(child, "name", source) {
                     push(out, NodeKind::Function, prefix, name, child, is_test_file);
+                }
+            }
+            "interface_declaration" => {
+                if let Some(name) = field_text(child, "name", source) {
+                    push(out, NodeKind::Type, prefix, name, child, false);
+                    if let Some(body) = child.child_by_field_name("body") {
+                        let new_prefix = join_path(prefix, name);
+                        let mut inner = body.walk();
+                        for member in body.children(&mut inner) {
+                            if member.kind() == "method_signature" {
+                                if let Some(method_name) = field_text(member, "name", source) {
+                                    push(
+                                        out,
+                                        NodeKind::Function,
+                                        &new_prefix,
+                                        method_name,
+                                        member,
+                                        false,
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
             "lexical_declaration" | "variable_declaration" => {

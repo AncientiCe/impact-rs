@@ -2,6 +2,21 @@
 
 All notable changes to `impact` are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- `impact-lang-ts` now indexes a TypeScript `interface`'s `method_signature` members as
+  symbols nested under the interface, the same way `class_declaration` methods already
+  are. Before this, a value typed only by an `interface` — never implemented as a class in
+  the same file, a common shape for hand-typed service objects, ports, or bindings to code
+  this adapter can't see into — was invisible on the receiving end of a method call: the
+  callee name never existed in the graph under that module, so the resolver's module+name
+  lookup came up empty and the edge was silently dropped, indistinguishable from an import
+  that resolved outside the project entirely. A `property_signature` typed with a function
+  type (`foo: (x) => T`, as opposed to shorthand `foo(x): T`) is not covered by this yet.
+  New `ts_interface_methods` fixture and 1 behavior test.
+
 ## [0.9.0] - 2026-09-11
 
 ### Added
