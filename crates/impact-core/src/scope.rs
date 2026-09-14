@@ -18,6 +18,7 @@ use crate::adapter::RefTarget;
 pub struct FileScope {
     module: String,
     imports: HashMap<String, String>,
+    default_imports: HashMap<String, String>,
     locals: HashSet<String>,
     wildcards: Vec<String>,
     unimported: RefTarget,
@@ -34,6 +35,7 @@ impl FileScope {
         Self {
             module: module.into(),
             imports: HashMap::new(),
+            default_imports: HashMap::new(),
             locals: HashSet::new(),
             wildcards: Vec::new(),
             unimported,
@@ -44,6 +46,21 @@ impl FileScope {
     /// imported from.
     pub fn add_import(&mut self, local_name: impl Into<String>, module: impl Into<String>) {
         self.imports.insert(local_name.into(), module.into());
+    }
+
+    /// Binds `local_name` to the module a *default* import brought it in from — same
+    /// bookkeeping as `add_import` (so `qualified()` still treats it as an ordinary
+    /// module-scoped name for `Default.staticThing()`-style access), plus a record that
+    /// `bare()` prefers: a default import's local name is chosen by the importer, not by
+    /// whatever the target module actually calls it, so a bare reference to it should
+    /// resolve against the module's default export (`RefTarget::ModuleDefault`) rather
+    /// than requiring a same-named symbol to exist there.
+    pub fn add_default_import(&mut self, local_name: impl Into<String>, module: impl Into<String>) {
+        let local_name = local_name.into();
+        let module = module.into();
+        self.default_imports
+            .insert(local_name.clone(), module.clone());
+        self.imports.insert(local_name, module);
     }
 
     /// A glob import (`use foo::*`, `from foo import *`) — brings in names this file
@@ -63,6 +80,9 @@ impl FileScope {
 
     /// Where a bare `name()` call points.
     pub fn bare(&self, name: &str) -> RefTarget {
+        if let Some(module) = self.default_imports.get(name) {
+            return RefTarget::ModuleDefault(module.clone());
+        }
         if let Some(module) = self.imports.get(name) {
             return RefTarget::Module(module.clone());
         }

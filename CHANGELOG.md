@@ -23,6 +23,21 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   enclosing named function, consistent with how a top-level call site is already handled.
   New `ts_jsx_registry_refs` fixture and 1 behavior test.
 
+- A second, independent blind spot found while verifying the fix above against a real
+  repo: a screen exported as `export default XScreen` and imported under a *different*
+  local alias (`import Foo from './XScreen'` — the file/alias name matching a project's
+  own naming convention, not the internal symbol's own name) still resolved to zero
+  consumers, whether referenced by a plain call or the JSX-attribute-value fix above.
+  `Resolver::in_module` required the reference's name to exactly match the target
+  symbol's own declared name, but a default import's local name is chosen entirely by
+  the importer and carries no information about what the target actually calls itself —
+  unlike every other import kind. `impact-lang-ts` now marks which symbol in a file is
+  its own default export (`SymbolDecl`/graph `Node` gained `is_default_export`, cache
+  schema bumped v5->v6) and binds a default import via a new `RefTarget::ModuleDefault`,
+  resolved by a new `Resolver::in_module_default` that matches on that flag instead of on
+  name. New `ts_default_import_alias` fixture and 1 behavior test, covering both a plain
+  call and a JSX attribute value through a renamed default import.
+
 ## [0.9.2] - 2026-09-11
 
 ### Fixed

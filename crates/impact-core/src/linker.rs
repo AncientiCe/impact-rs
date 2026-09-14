@@ -38,6 +38,12 @@ pub struct Resolver<'g> {
     /// target or a same-file call precisely naming a generated symbol should still find
     /// it.
     generated: std::collections::HashSet<NodeId>,
+    /// `(qualified_path, id)` for every node an adapter marked `is_default_export` (see
+    /// `SymbolDecl::is_default_export`) — consulted only by `in_module_default`. Kept as
+    /// a plain list rather than keyed by name: there's normally exactly one per module,
+    /// so a name-keyed map would buy nothing a linear segment-containment scan doesn't
+    /// already give `in_module` itself.
+    default_exports: Vec<(&'g str, NodeId)>,
 }
 
 impl<'g> Resolver<'g> {
@@ -46,10 +52,14 @@ impl<'g> Resolver<'g> {
         let mut by_last_two_segments: HashMap<String, Vec<NodeId>> = HashMap::new();
         let mut by_short_name: HashMap<&str, Vec<(&str, NodeId)>> = HashMap::new();
         let mut generated = std::collections::HashSet::new();
+        let mut default_exports = Vec::new();
 
         for node in graph.nodes() {
             if node.is_generated {
                 generated.insert(node.id.clone());
+            }
+            if node.is_default_export {
+                default_exports.push((node.qualified_path.as_str(), node.id.clone()));
             }
             // `Module` is deliberately excluded: this project doesn't emit any today
             // (see `impact-lang-rust`'s module-prefix comment), and admitting it would
@@ -83,6 +93,7 @@ impl<'g> Resolver<'g> {
             by_last_two_segments,
             by_short_name,
             generated,
+            default_exports,
         }
     }
 
@@ -131,6 +142,22 @@ impl<'g> Resolver<'g> {
                     // The import resolved somewhere outside this project (a dependency, a
                     // standard-library module). Dropping the edge is right: inventing a
                     // same-named local match is exactly the false positive this fixes.
+                    return None;
+                }
+                let confidence = if ids.len() == 1 {
+                    Confidence::Exact
+                } else {
+                    Confidence::Probable
+                };
+                Some((ids, confidence))
+            }
+            // A default import's local name carries no information about what the target
+            // is actually called there (unlike `Module`, where the name is an import or
+            // same-file declaration the file itself wrote) — so this ignores `r.to_name`
+            // entirely and matches on `is_default_export` instead.
+            RefTarget::ModuleDefault(module) => {
+                let ids = self.in_module_default(module);
+                if ids.is_empty() {
                     return None;
                 }
                 let confidence = if ids.len() == 1 {
@@ -201,6 +228,25 @@ impl<'g> Resolver<'g> {
         } else {
             non_generated
         }
+    }
+
+    /// Every node marked `is_default_export` that lives under `module` — the
+    /// `ModuleDefault` counterpart to `in_module`, using the same segment-containment
+    /// test but never matching on name, since a default import's local alias isn't
+    /// evidence of the target's own name the way a named import's is.
+    fn in_module_default(&self, module: &str) -> Vec<NodeId> {
+        let wanted: Vec<&str> = module.split("::").filter(|s| !s.is_empty()).collect();
+        self.default_exports
+            .iter()
+            .filter(|(path, _)| {
+                let segments: Vec<&str> = path.split("::").collect();
+                segments
+                    .len()
+                    .checked_sub(1)
+                    .is_some_and(|end| contains_run(&segments[..end], &wanted))
+            })
+            .map(|(_, id)| id.clone())
+            .collect()
     }
 }
 

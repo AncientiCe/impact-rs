@@ -36,6 +36,15 @@ pub struct SymbolDecl {
     /// same-named method — a generated mock living beside its real implementation
     /// shouldn't be what silently downgrades that implementation's own confidence.
     pub is_generated: bool,
+    /// Whether this symbol is the module's default export (TypeScript/JavaScript's
+    /// `export default <name>`). Never a guess: an adapter with no such concept (every
+    /// adapter but `impact-lang-ts`, so far) always leaves this `false`. Drives
+    /// `Resolver::in_module_default`, which lets a default import resolve regardless of
+    /// what local alias the importing file gives it — unlike a named import, a default
+    /// import's binding name carries no information about the target's own declared
+    /// name, so matching by name (`Resolver::in_module`) is structurally the wrong tool
+    /// for it.
+    pub is_default_export: bool,
 }
 
 /// How far an adapter could narrow down what a reference's `to_name` actually refers to,
@@ -52,6 +61,13 @@ pub enum RefTarget {
     /// directory-scoped language (Go, Kotlin) and a file-scoped one (TypeScript, Rust)
     /// share one rule.
     Module(String),
+    /// The adapter resolved the name to a *default* import: the module a default
+    /// import/`export ... from` bound the name to, where — unlike `Module` — the name at
+    /// the call site is only ever the importer's own chosen alias, never evidence of what
+    /// the target itself is called. The linker matches this against whichever symbol in
+    /// that module is marked `SymbolDecl::is_default_export` (see
+    /// `Resolver::in_module_default`) instead of matching by name.
+    ModuleDefault(String),
     /// The adapter looked for scope evidence and found none: a method call on a receiver
     /// whose type it can't determine, or a bare name with no matching import and no
     /// same-file declaration. Still resolved structurally — over-reporting beats missing

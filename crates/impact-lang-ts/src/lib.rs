@@ -127,6 +127,12 @@ impl LanguageAdapter for TsAdapter {
             is_test_file,
             &mut out,
         );
+        mark_default_export(
+            ast.tree.root_node(),
+            ast.source.as_bytes(),
+            &prefix,
+            &mut out,
+        );
         out
     }
 
@@ -209,6 +215,56 @@ fn is_callable_interface_member(member: Node) -> bool {
     }
 }
 
+/// Finds this file's `export default ...` (there's at most one per module, by JS/TS's own
+/// rules) and, if it names an identifier this file already declared as a symbol
+/// (`export default XScreen` where `const XScreen = ...` or `function XScreen() {}` was
+/// collected above), flags that one `SymbolDecl` with `is_default_export`. `export
+/// default` is only valid at a file's top level, never nested, so this only needs to scan
+/// `root`'s direct children rather than recursing — unlike `walk`, which already handles
+/// an exported *declaration* (`export default function Foo() {}`, `export default class
+/// Foo {}`) as an ordinary top-level declaration via its ordinary fallthrough, so by the
+/// time this runs, the matching `SymbolDecl` already exists in `out` either way; this
+/// pass only needs to find *which* one to flag. An anonymous default export (`export
+/// default () => {}`, `export default someCall()`) introduces no name at all — nothing to
+/// flag, same as it's never been a symbol of its own.
+fn mark_default_export(root: Node, source: &[u8], prefix: &str, out: &mut [SymbolDecl]) {
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        if child.kind() != "export_statement" {
+            continue;
+        }
+        let Some(target) = default_export_target(child, source, prefix) else {
+            continue;
+        };
+        if let Some(symbol) = out.iter_mut().find(|s| s.qualified_path == target) {
+            symbol.is_default_export = true;
+        }
+        return;
+    }
+}
+
+/// The qualified path `export default ...` in `export_statement` names, if it names
+/// anything a symbol could exist under: a bare identifier (`export default XScreen`), or
+/// a named `function`/`class` declaration (`export default function XScreen() {}`) —
+/// `export`/`default` are anonymous keyword tokens (confirmed via a real parse-tree
+/// dump), so the exported value is always the statement's one named child.
+fn default_export_target(export_stmt: Node, source: &[u8], prefix: &str) -> Option<String> {
+    let mut cursor = export_stmt.walk();
+    let is_default = export_stmt
+        .children(&mut cursor)
+        .any(|c| c.kind() == "default");
+    if !is_default {
+        return None;
+    }
+    let value = export_stmt.named_child(0)?;
+    let name = match value.kind() {
+        "identifier" => value.utf8_text(source).ok()?,
+        "function_declaration" | "class_declaration" => field_text(value, "name", source)?,
+        _ => return None,
+    };
+    Some(join_path(prefix, name))
+}
+
 /// A JSX attribute's `{expr}` value, if `expr` is a bare identifier — `component={Foo}`,
 /// not a string (`name="Foo"`), a call, or an inline arrow/function. `jsx_attribute` has
 /// no named fields (confirmed via a real parse-tree dump), so the value is its second
@@ -257,6 +313,7 @@ fn push(
         end_line: node.end_position().row + 1,
         is_test,
         is_generated: false,
+        is_default_export: false,
     });
 }
 
@@ -368,7 +425,8 @@ fn collect_import(
     let mut cursor = statement.walk();
     for child in statement.children(&mut cursor) {
         match child.kind() {
-            // `import Default from './x'`
+            // `import Default from './x'` — see `bind_import_clause`'s "identifier" arm
+            // for why this binds via `add_default_import`, not `add_import`.
             "import_clause" => bind_import_clause(child, source, &module, scope),
             // `export { a, b } from './x'` — the re-exporting file is a path to those
             // symbols too, so a caller importing them from here still lands in `./x`.
@@ -382,9 +440,17 @@ fn bind_import_clause(clause: Node, source: &[u8], module: &str, scope: &mut Fil
     let mut cursor = clause.walk();
     for child in clause.children(&mut cursor) {
         match child.kind() {
+            // `import Foo from './x'` — a *default* import. The local name (`Foo`) is
+            // chosen by this file, not by whatever `./x` actually calls its own default
+            // export (see `is_default_export`/`mark_default_exports`), so binding it via
+            // `add_default_import` matters: it's the difference between a reference
+            // resolving only when the importer happens to reuse the export's own name,
+            // and resolving whenever the target module has exactly one default export at
+            // all, the same way `export default XScreen` imported as `import Foo from
+            // './XScreen'` actually works in real code.
             "identifier" => {
                 if let Ok(name) = child.utf8_text(source) {
-                    scope.add_import(name, module);
+                    scope.add_default_import(name, module);
                 }
             }
             "named_imports" => bind_named_imports(child, source, module, scope),

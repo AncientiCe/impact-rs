@@ -138,6 +138,7 @@ fn push(
         end_line: node.end_position().row + 1,
         is_test,
         is_generated: false,
+        is_default_export: false,
     });
 }
 

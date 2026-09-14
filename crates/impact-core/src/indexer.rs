@@ -190,6 +190,7 @@ impl<'a> Indexer<'a> {
                     language: adapter.language_id().to_string(),
                     is_test: decl.is_test,
                     is_generated: decl.is_generated,
+                    is_default_export: decl.is_default_export,
                 })
                 .collect();
 
@@ -250,6 +251,7 @@ impl<'a> Indexer<'a> {
                 language: String::new(),
                 is_test: false,
                 is_generated: false,
+                is_default_export: false,
             };
             graph.insert_node(node.clone());
             synthesized.push(node);
