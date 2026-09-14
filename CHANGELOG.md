@@ -2,6 +2,27 @@
 
 All notable changes to `impact` are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- `impact-lang-ts`'s call extraction (`collect_refs`) only ever walked `call_expression`
+  nodes, so a symbol handed somewhere as *data* rather than called produced no edge at
+  all. Found while dogfooding on a real React Native app: `impact_file` on a screen
+  component reached only through a React Navigation-style route registry
+  (`<Stack.Screen component={PrinterEditor} />`) or an object-literal registry
+  (`{ PrinterEditor }`, or `{ screen: PrinterEditor }`) reported zero consumers, even
+  though the component is real and used in production — the same blind spot applies to
+  Redux action/selector registries and any other "pass a symbol as data" pattern. Now
+  emits an `EdgeKind::References` edge (already used by `impact-lang-rust`'s enum-variant
+  references, already unioned into blast-radius traversal) for a bare identifier used as a
+  JSX attribute's expression value, an object-literal property's value, or object-literal
+  shorthand — resolved through the same module+name `scope` a call-target identifier
+  already uses, so it gets the same confidence tiering. Scoped deliberately to a bare
+  identifier only (not a member expression, call, or inline function) and to sites with an
+  enclosing named function, consistent with how a top-level call site is already handled.
+  New `ts_jsx_registry_refs` fixture and 1 behavior test.
+
 ## [0.9.2] - 2026-09-11
 
 ### Fixed

@@ -209,6 +209,20 @@ fn is_callable_interface_member(member: Node) -> bool {
     }
 }
 
+/// A JSX attribute's `{expr}` value, if `expr` is a bare identifier — `component={Foo}`,
+/// not a string (`name="Foo"`), a call, or an inline arrow/function. `jsx_attribute` has
+/// no named fields (confirmed via a real parse-tree dump), so the value is its second
+/// named child when present at all (a boolean shorthand attribute like `<Foo disabled />`
+/// has none).
+fn jsx_attribute_value_identifier(attribute: Node) -> Option<Node> {
+    let value = attribute.named_child(1)?;
+    if value.kind() != "jsx_expression" {
+        return None;
+    }
+    let inner = value.named_child(0)?;
+    (inner.kind() == "identifier").then_some(inner)
+}
+
 /// Whether every function/method declared in this file should be marked a test, by the
 /// file-naming convention Jest, Vitest, and Mocha all share (unlike a call-based
 /// convention like `test()`/`it()`, which varies enough between those frameworks that
@@ -903,6 +917,60 @@ fn collect_refs(
                         scope,
                         out,
                     );
+                }
+            }
+            // A bare identifier handed somewhere as *data* rather than called — a JSX
+            // attribute's expression value (`component={Foo}`, the shape a React
+            // Navigation-style route registry uses) or an object-literal property's value
+            // (`{ screen: Foo }`) — is a real dependency edge `call_expression`-only
+            // extraction always missed. Emitted as `References` (already used by
+            // impact-lang-rust's enum-variant references, already unioned into
+            // blast-radius traversal), resolved through the same `scope` a call-target
+            // identifier would be, so it gets the same confidence tiering.
+            "jsx_attribute" => {
+                if let Some(from) = current_fn {
+                    if let Some(identifier) = jsx_attribute_value_identifier(child) {
+                        if let Ok(name) = identifier.utf8_text(source) {
+                            out.push(RefDecl {
+                                from_qualified_path: from.to_string(),
+                                to_name: name.to_string(),
+                                kind: EdgeKind::References,
+                                to_target: scope.bare(name),
+                            });
+                        }
+                    }
+                }
+                collect_refs(child, source, prefix, current_fn, is_test_file, scope, out);
+            }
+            "pair" => {
+                if let Some(from) = current_fn {
+                    if let Some(value) = child.child_by_field_name("value") {
+                        if value.kind() == "identifier" {
+                            if let Ok(name) = value.utf8_text(source) {
+                                out.push(RefDecl {
+                                    from_qualified_path: from.to_string(),
+                                    to_name: name.to_string(),
+                                    kind: EdgeKind::References,
+                                    to_target: scope.bare(name),
+                                });
+                            }
+                        }
+                    }
+                }
+                collect_refs(child, source, prefix, current_fn, is_test_file, scope, out);
+            }
+            // A leaf node (`{ Foo }`, shorthand for `{ Foo: Foo }`) — no children to
+            // recurse into.
+            "shorthand_property_identifier" => {
+                if let Some(from) = current_fn {
+                    if let Ok(name) = child.utf8_text(source) {
+                        out.push(RefDecl {
+                            from_qualified_path: from.to_string(),
+                            to_name: name.to_string(),
+                            kind: EdgeKind::References,
+                            to_target: scope.bare(name),
+                        });
+                    }
                 }
             }
             _ => {
