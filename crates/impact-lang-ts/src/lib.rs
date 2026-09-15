@@ -993,16 +993,30 @@ fn collect_refs(
             // impact-lang-rust's enum-variant references, already unioned into
             // blast-radius traversal), resolved through the same `scope` a call-target
             // identifier would be, so it gets the same confidence tiering.
+            //
+            // Only emitted when `scope.bare` finds real evidence (an import or a same-file
+            // top-level declaration) — unlike a call target, which falls back to a
+            // project-wide short-name match when `Opaque` (see `linker::resolve_ref`) and
+            // accepts the false-positive risk as the cost of not missing a real call, a
+            // value reference has no such excuse to fall back on: React's own callback-prop
+            // convention (`onDone`, `onSave`, `onSuccess`, ...) means a *local* parameter
+            // forwarded as a JSX attribute value collides with an unrelated same-named
+            // symbol elsewhere in the project constantly, and `Opaque` here means exactly
+            // that — no import, no local declaration, nothing tying this name to any
+            // particular target at all.
             "jsx_attribute" => {
                 if let Some(from) = current_fn {
                     if let Some(identifier) = jsx_attribute_value_identifier(child) {
                         if let Ok(name) = identifier.utf8_text(source) {
-                            out.push(RefDecl {
-                                from_qualified_path: from.to_string(),
-                                to_name: name.to_string(),
-                                kind: EdgeKind::References,
-                                to_target: scope.bare(name),
-                            });
+                            let to_target = scope.bare(name);
+                            if !matches!(to_target, RefTarget::Opaque) {
+                                out.push(RefDecl {
+                                    from_qualified_path: from.to_string(),
+                                    to_name: name.to_string(),
+                                    kind: EdgeKind::References,
+                                    to_target,
+                                });
+                            }
                         }
                     }
                 }
@@ -1013,12 +1027,15 @@ fn collect_refs(
                     if let Some(value) = child.child_by_field_name("value") {
                         if value.kind() == "identifier" {
                             if let Ok(name) = value.utf8_text(source) {
-                                out.push(RefDecl {
-                                    from_qualified_path: from.to_string(),
-                                    to_name: name.to_string(),
-                                    kind: EdgeKind::References,
-                                    to_target: scope.bare(name),
-                                });
+                                let to_target = scope.bare(name);
+                                if !matches!(to_target, RefTarget::Opaque) {
+                                    out.push(RefDecl {
+                                        from_qualified_path: from.to_string(),
+                                        to_name: name.to_string(),
+                                        kind: EdgeKind::References,
+                                        to_target,
+                                    });
+                                }
                             }
                         }
                     }
@@ -1030,12 +1047,15 @@ fn collect_refs(
             "shorthand_property_identifier" => {
                 if let Some(from) = current_fn {
                     if let Ok(name) = child.utf8_text(source) {
-                        out.push(RefDecl {
-                            from_qualified_path: from.to_string(),
-                            to_name: name.to_string(),
-                            kind: EdgeKind::References,
-                            to_target: scope.bare(name),
-                        });
+                        let to_target = scope.bare(name);
+                        if !matches!(to_target, RefTarget::Opaque) {
+                            out.push(RefDecl {
+                                from_qualified_path: from.to_string(),
+                                to_name: name.to_string(),
+                                kind: EdgeKind::References,
+                                to_target,
+                            });
+                        }
                     }
                 }
             }

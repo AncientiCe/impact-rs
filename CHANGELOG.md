@@ -2,6 +2,27 @@
 
 All notable changes to `impact` are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- `impact-lang-ts`'s `References` edges for a bare value reference (a JSX attribute's
+  expression value, an object-literal property's value, or shorthand — see 0.9.3) were
+  emitted even when the identifier had no import and no same-file top-level declaration
+  backing it. The linker then resolved that `Opaque` target by matching the bare name
+  against *any* same-named symbol project-wide (the same fallback a call target already
+  legitimately uses), which is a false positive far more often here: React's own
+  callback-prop convention (`onDone`, `onSave`, `onSuccess`, ...) means a local parameter
+  forwarded as a JSX attribute value collides with an unrelated same-named function
+  elsewhere constantly. Found while dogfooding the 0.9.3 fix against a real React Native
+  app: `AddAttribution.tsx`'s own local `onDone` callback parameter was reported as a
+  dependent of an unrelated `PrinterEditor.tsx`, at `Probable` confidence, purely because
+  both files happen to use the name `onDone` for something. A `References` edge is now
+  only emitted for a bare value reference when `FileScope::bare` finds real evidence (an
+  import or a same-file top-level declaration) — no fallback, since unlike a call site a
+  value reference has no "might still be a real call we'd otherwise miss" excuse to trade
+  precision for. New `ts_value_ref_scope_guard` fixture and 1 behavior test.
+
 ## [0.9.3] - 2026-09-14
 
 ### Fixed
