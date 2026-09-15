@@ -6,6 +6,21 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ### Fixed
 
+- `compute_impact`'s BFS (`impact-core`) used to keep chasing a dependent's own callers
+  for further hops even after a hop resolved at `Confidence::Heuristic` — a bare short
+  name matching more than one candidate, structurally the weakest evidence this tool
+  produces. One ambiguous short-name collision could therefore fan out through an
+  unbounded number of further hops, compounding an already-weak signal instead of just
+  reporting it: found while dogfooding against a real ~30k-symbol, 7-language monorepo,
+  where querying one Swift file (whose own call resolution is deliberately module-wide by
+  name rather than import-scoped, and so hits the short-name-collision tier far more than
+  a file-scoped language does) returned 61 direct + 7066 indirect dependents, all
+  `Heuristic`, pointing at unrelated JS/TS files — 34k+ lines, exceeding the MCP response
+  limit. A `Heuristic`-confidence dependent is still reported (over-report rather than
+  silently miss a caller), but the BFS no longer treats it as a trusted stepping stone:
+  its own callers are not explored. New `heuristic_fanout_bound` fixture and 1 behavior
+  test.
+
 - `impact-lang-ts`'s `References` edges for a bare value reference (a JSX attribute's
   expression value, an object-literal property's value, or shorthand — see 0.9.3) were
   emitted even when the identifier had no import and no same-file top-level declaration

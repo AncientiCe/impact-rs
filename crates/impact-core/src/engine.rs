@@ -152,7 +152,17 @@ fn compute_impact(graph: &SymbolGraph, seeds: HashSet<NodeId>) -> ImpactReport {
                     .entry(name)
                     .and_modify(|(c, _)| *c = (*c).weaker(confidence))
                     .or_insert((confidence, caller.clone()));
-                next.push(caller.clone());
+                // `Heuristic` is the weakest evidence this tool produces (a bare short
+                // name matching more than one candidate) — still worth reporting (over-
+                // report rather than miss a caller), but not worth trusting as a stepping
+                // stone for further hops: chasing *its* callers would compound one
+                // already-ambiguous match into an unbounded fan-out of further guesses,
+                // most of them unrelated to what was actually queried. Direct/indirect
+                // entries reached only by continuing past a `Heuristic` hop are dropped
+                // here rather than surfaced, not filtered out after the fact.
+                if confidence != Confidence::Heuristic {
+                    next.push(caller.clone());
+                }
             }
         }
         frontier = next;
