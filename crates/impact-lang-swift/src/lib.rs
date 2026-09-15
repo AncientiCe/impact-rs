@@ -270,29 +270,52 @@ fn contains_call(node: Node) -> bool {
     false
 }
 
-/// Reads this file's top-level declarations into a `FileScope`.
+/// Reads this file's top-level declarations, and every method its types declare, into a
+/// `FileScope`.
 ///
 /// Swift is the one language here whose unresolved names stay `Unscoped` rather than
 /// `Opaque`: `import` names a whole module (Foundation, another framework), never a
 /// symbol, and everything declared at a module's top level is visible throughout it
 /// without ceremony. So a bare `prune(x)` really might be the `prune` in another file,
 /// and the linker's structural tiers are the best evidence available rather than a guess
-/// standing in for evidence. What `self.` gives us is still worth having: it names the
-/// enclosing type, whose members are declared right here.
+/// standing in for evidence.
+///
+/// What's declared here isn't only each file's top-level names, though — it's every
+/// method every type in this file declares too, recursing into a type's body (and any
+/// type nested inside it) the same way `walk` does. Swift's single most common calling
+/// convention is an *implicit*-self call: `helper()` from another method of the same
+/// type, with no `self.` prefix required (unlike `self.helper()`, which already resolved
+/// correctly via `FileScope::own()` — this is about the bare spelling only). Without
+/// this, a bare implicit-self call to a method declared two lines away fell through to
+/// `Unscoped` and was resolved as if it named something in a completely different file —
+/// and in a large project, a short, ordinary method name (`connect`, `parse`, `value`)
+/// has no shortage of unrelated same-named matches elsewhere to collide with.
 fn build_scope(root: Node, source: &[u8], prefix: &str) -> FileScope {
     let mut scope = FileScope::new(prefix, RefTarget::Unscoped);
-    let mut cursor = root.walk();
-    for child in root.children(&mut cursor) {
-        if matches!(
-            child.kind(),
-            "function_declaration" | "class_declaration" | "protocol_declaration"
-        ) {
-            if let Some(name) = field_text(child, "name", source) {
-                scope.declare_local(name);
+    declare_scope_names(root, source, &mut scope);
+    scope
+}
+
+fn declare_scope_names(node: Node, source: &[u8], scope: &mut FileScope) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "function_declaration" => {
+                if let Some(name) = field_text(child, "name", source) {
+                    scope.declare_local(name);
+                }
             }
+            "class_declaration" | "protocol_declaration" => {
+                if let Some(name) = field_text(child, "name", source) {
+                    scope.declare_local(name);
+                }
+                if let Some(body) = child.child_by_field_name("body") {
+                    declare_scope_names(body, source, scope);
+                }
+            }
+            _ => {}
         }
     }
-    scope
 }
 
 /// Where a call's callee points: `self.method()` is this file's own module, a bare name

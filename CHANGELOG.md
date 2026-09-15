@@ -6,6 +6,29 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ### Fixed
 
+- `impact-lang-swift`'s `build_scope` only ever declared a file's *top-level*
+  function/class/protocol names as locals — never a class's own methods — so an
+  *implicit-self* call (`helper()` from another method of the same type, valid Swift
+  with no `self.` prefix required, arguably Swift's single most common calling
+  convention; `self.helper()` already resolved correctly via `FileScope::own()`) fell
+  through to `RefTarget::Unscoped` and was resolved as if it named something in a
+  completely different file — the dominant real-world source of the fan-out
+  `heuristic_fanout_bound` bounds. `build_scope` now recurses into a type's body (and
+  any type nested inside it, matching `walk`'s own recursion) declaring every method it
+  finds, the same way a bare call to a top-level function already resolved. New
+  `swift_implicit_self_scope` fixture and 1 behavior test.
+
+  Verified against the real ~30k-symbol repo this was found in (local release build,
+  full re-index): this fix alone doesn't move `impact_file` on the original Swift file
+  much (most of its `direct` dependents turn out to be *other* files' own unscoped bare
+  calls to a common name — `render`, `map`, `select` — that also happens to be a method
+  this file declares, the reverse direction from what this fix addresses), but it's a
+  real, independently-verified correctness fix on its own terms (see
+  `swift_implicit_self_scope`) and a genuine contributor to the fan-out this file's
+  *own* calls caused elsewhere. The residual noise is the structural short-name-
+  collision limitation described below, at a scale a type-unaware tool can't fully
+  resolve without deeper (semantic) analysis.
+
 - `compute_impact`'s BFS (`impact-core`) used to keep chasing a dependent's own callers
   for further hops even after a hop resolved at `Confidence::Heuristic` — a bare short
   name matching more than one candidate, structurally the weakest evidence this tool
