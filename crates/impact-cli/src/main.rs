@@ -169,12 +169,17 @@ enum Command {
     /// Draft a GitHub issue reporting a case where `impact` missed or misreported
     /// something — only after manually confirming the gap (see the agent rule's "BLIND
     /// SPOT FOUND" section). Composing the draft never touches the network; it only
-    /// prints what would be filed.
+    /// prints what would be filed. This files against a public repo, so redact every
+    /// workspace-specific detail first: no local paths, no private repo names, no
+    /// internal file/symbol names, no product-specific architecture — describe the shape
+    /// of the miss generically instead (language, rough counts, kind of construct).
     ReportBlindspot {
-        /// Short issue title.
+        /// Short issue title — generic, no private repo or project names.
         title: String,
-        /// Issue body describing what was expected vs. what `impact` actually reported.
-        /// Read from stdin if omitted.
+        /// Issue body describing what was expected vs. what `impact` actually reported,
+        /// rewritten to be generic and redacted: strip local paths, private repo names,
+        /// internal file/symbol names, and product-specific architecture before filling
+        /// this in. Read from stdin if omitted.
         #[arg(long)]
         body: Option<String>,
         /// What kind of gap this is (default: other).

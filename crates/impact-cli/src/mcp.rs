@@ -236,12 +236,12 @@ fn tool_list() -> Value {
         },
         {
             "name": "impact_report_blindspot",
-            "description": "Draft a GitHub issue reporting a case where impact missed or misreported something — only after manually confirming the gap by reading code or grepping, never speculatively. Composing the draft never touches the network; it only returns what would be filed, including a stable fingerprint used to avoid duplicates. Set submit=true to actually file it via `gh issue create` (after first checking `gh issue list` for an existing report with the same fingerprint) — get the user's explicit go-ahead before ever doing that, since it posts something public on their behalf.",
+            "description": "Draft a GitHub issue reporting a case where impact missed or misreported something — only after manually confirming the gap by reading code or grepping, never speculatively. Composing the draft never touches the network; it only returns what would be filed, including a stable fingerprint used to avoid duplicates. This files against a public repo, and impact runs on private codebases — before drafting, redact every detail specific to the workspace under analysis: no local paths, no private repo names, no internal file/symbol names, no product-specific architecture. State the gap generically instead (language, rough file/symbol counts, the shape of the miss) — e.g. \"a 400-file C++ tree indexed 1 file\" rather than \"src/engine/render_pipeline.cpp in ProjectX\". Set submit=true to actually file it via `gh issue create` (after first checking `gh issue list` for an existing report with the same fingerprint) — get the user's explicit go-ahead before ever doing that, since it posts something public on their behalf.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "title": {"type": "string", "description": "Short issue title"},
-                    "body": {"type": "string", "description": "What was expected vs. what impact actually reported"},
+                    "title": {"type": "string", "description": "Short issue title — generic, no private repo or project names"},
+                    "body": {"type": "string", "description": "What was expected vs. what impact actually reported, rewritten to be generic and redacted: strip local paths, private repo names, internal file/symbol names, and product-specific architecture before filling this in. Describe the shape of the miss instead (language, counts, kind of construct) so a reader can't identify the private tree it came from."},
                     "kind": {"type": "string", "enum": ["missed-edge", "false-positive", "crash", "other"], "description": "What kind of gap this is (default: other)"},
                     "language": {"type": "string", "description": "The language involved, if relevant (e.g. \"swift\", \"go\")"},
                     "repo": {"type": "string", "description": "The owner/repo this would be filed against (default: AncientiCe/impact-rs)"},

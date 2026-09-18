@@ -2,6 +2,17 @@
 
 All notable changes to `impact` are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- `impact_report_blindspot` (CLI `report-blindspot` and its MCP tool) now tells the
+  caller to redact workspace-specific detail before drafting: no local paths, no
+  private repo names, no internal file/symbol names, no product-specific architecture.
+  The tool description and the `body`/`title` field docs ask for a generic description
+  of the miss (language, rough counts, kind of construct) instead, since the draft
+  files against a public repo while `impact` itself runs on private codebases.
+
 ## [0.10.0] - 2026-09-18
 
 ### Added

@@ -563,6 +563,42 @@ fn write_fake_gh(dir: &Path, list_json: &str, create_body: &str) -> std::path::P
     path
 }
 
+/// `impact_report_blindspot` files a public GitHub issue on the user's behalf, but the
+/// tool is run against private repos — an agent that pastes real local paths, repo
+/// names, or internal symbol names into the draft leaks workspace details onto a public
+/// tracker. The tool's own description and its `body` field must tell the agent to
+/// rewrite evidence generically before drafting, not just describe what the field holds.
+#[test]
+fn report_blindspot_tool_requires_redaction() {
+    let responses = mcp_round_trip(&[serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/list"
+    })]);
+
+    let tools = responses[0]["result"]["tools"].as_array().unwrap();
+    let tool = tools
+        .iter()
+        .find(|t| t["name"] == "impact_report_blindspot")
+        .expect("impact_report_blindspot should be listed");
+
+    let description = tool["description"].as_str().unwrap();
+    assert!(
+        description.contains("public") && description.contains("redact"),
+        "description should warn this files a public issue and demand redaction: {description}"
+    );
+
+    let body_description = tool["inputSchema"]["properties"]["body"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(
+        body_description.contains("redact") || body_description.contains("generic"),
+        "body field should require generic, redacted evidence: {body_description}"
+    );
+    assert!(
+        body_description.contains("path") || body_description.contains("repo name"),
+        "body field should call out what to strip (local paths, private repo/symbol names): {body_description}"
+    );
+}
+
 /// `impact_report_blindspot` without `submit` never touches the network — it only
 /// returns the composed draft, always with `submitted: false`.
 #[test]
