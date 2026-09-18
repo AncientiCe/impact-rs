@@ -2,6 +2,17 @@
 
 All notable changes to `impact` are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- `impact report-blindspot <title>` composes a GitHub issue draft describing a case
+  where `impact` missed or misreported something (`--body`, `--kind
+  missed-edge|false-positive|crash|other`, `--language`, `--repo`, `--json`).
+  Composition is pure and offline — it only prints the draft, including a stable
+  fingerprint for later de-duplication; nothing is ever sent to GitHub by this
+  subcommand alone.
+
 ## [0.9.4] - 2026-09-15
 
 ### Fixed

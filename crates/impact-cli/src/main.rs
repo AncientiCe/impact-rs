@@ -1,4 +1,5 @@
 mod analytics;
+mod blindspot;
 mod hook;
 mod install;
 mod mcp;
@@ -8,6 +9,7 @@ use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use blindspot::BlindspotKind;
 use clap::{Parser, Subcommand, ValueEnum};
 use impact_core::{Confidence, CrossProjectMatch, ImpactReport, WorkspaceImpactReport};
 
@@ -161,6 +163,30 @@ enum Command {
         #[arg(long)]
         summary: bool,
         /// Print machine-readable JSON instead of the tree-text report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Draft a GitHub issue reporting a case where `impact` missed or misreported
+    /// something — only after manually confirming the gap (see the agent rule's "BLIND
+    /// SPOT FOUND" section). Composing the draft never touches the network; it only
+    /// prints what would be filed.
+    ReportBlindspot {
+        /// Short issue title.
+        title: String,
+        /// Issue body describing what was expected vs. what `impact` actually reported.
+        /// Read from stdin if omitted.
+        #[arg(long)]
+        body: Option<String>,
+        /// What kind of gap this is (default: other).
+        #[arg(long, value_enum)]
+        kind: Option<BlindspotKind>,
+        /// The language involved, if relevant (e.g. "swift", "go").
+        #[arg(long)]
+        language: Option<String>,
+        /// The `owner/repo` this would be filed against.
+        #[arg(long, default_value = "AncientiCe/impact-rs")]
+        repo: String,
+        /// Print machine-readable JSON instead of a human summary.
         #[arg(long)]
         json: bool,
     },
@@ -362,6 +388,16 @@ fn main() -> anyhow::Result<()> {
                 summary,
                 json,
             )
+        }),
+        Command::ReportBlindspot {
+            title,
+            body,
+            kind,
+            language,
+            repo,
+            json,
+        } => with_usage_recorded("report-blindspot", || {
+            run_report_blindspot(&title, body, kind, language.as_deref(), &repo, json)
         }),
         Command::Hook { event } => match event {
             HookEvent::PreToolUse => hook::pre_tool_use(),
@@ -683,6 +719,47 @@ fn run_diff(
         summary,
         json,
     )
+}
+
+fn run_report_blindspot(
+    title: &str,
+    body: Option<String>,
+    kind: Option<BlindspotKind>,
+    language: Option<&str>,
+    repo: &str,
+    json: bool,
+) -> anyhow::Result<()> {
+    let body = match body {
+        Some(body) => body,
+        None => {
+            let mut buf = String::new();
+            io::stdin()
+                .read_to_string(&mut buf)
+                .context("reading body from stdin")?;
+            buf
+        }
+    };
+    let draft = blindspot::compose_draft(
+        title,
+        &body,
+        kind.unwrap_or(BlindspotKind::Other),
+        language,
+        repo,
+    );
+
+    if json {
+        let mut value = serde_json::to_value(&draft)?;
+        value["submitted"] = serde_json::Value::Bool(false);
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(());
+    }
+
+    println!("DRAFT (dry run — pass --submit to file this issue)");
+    println!("repo:  {}", draft.repo);
+    println!("title: {}", draft.title);
+    println!("---");
+    println!("{}", draft.body);
+    Ok(())
 }
 
 fn run_index(path: &Path, cache_dir: Option<&Path>, force: bool, json: bool) -> anyhow::Result<()> {

@@ -23,6 +23,7 @@ impact-lang-go = { path = "../impact-lang-go" }
 impact-lang-kotlin = { path = "../impact-lang-kotlin" }
 impact-lang-swift = { path = "../impact-lang-swift" }
 anyhow.workspace = true
+blake3.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
