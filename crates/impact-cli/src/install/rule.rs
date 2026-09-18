@@ -43,6 +43,16 @@ approach it" discussion that hasn't settled on a concrete target doesn't need it
   `impact_file`/`impact_change` against the same target to confirm the blast radius you
   addressed matches what's reported now, and nothing new appeared.
 
+## BLIND SPOT FOUND
+*Only after you've manually confirmed — by reading the code or grepping, not by
+assumption — that impact_file/impact_change/impact_diff missed a real caller or
+reported one that doesn't exist.*
+→ Run `impact report-blindspot "<short title>"` (no `--submit`) to draft the report.
+→ Show the drafted title and body to the user and get their explicit go-ahead before
+  ever adding `--submit` — this files a public GitHub issue and is not yours to send
+  unilaterally.
+→ Never report a speculative or unverified gap — only one you've confirmed by hand.
+
 `impact_change` grammar: `rename <path>`, `rename <path> to <path>`, `remove <path>`,
 `remove variant <Enum>::<Variant>`, `remove field <Type>.<field>`, `change signature of
 <path>`. Not natural language — an unrecognized description is a hard error."#;

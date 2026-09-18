@@ -94,6 +94,7 @@ cargo run -p impact-cli -- mcp
 | `impact query <file> [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|probable\|heuristic] [--summary] [--json]` | Blast radius of a file. |
 | `impact change "<description>" [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|probable\|heuristic] [--summary] [--json]` | Blast radius of one symbol-level change. |
 | `impact diff [--file <path>] [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|probable\|heuristic] [--summary] [--json]` | Blast radius of a unified diff — reads from `--file`, or stdin if omitted. |
+| `impact report-blindspot <title> [--body <text>] [--kind missed-edge\|false-positive\|crash\|other] [--language <lang>] [--repo <owner/repo>] [--submit] [--json]` | Draft a GitHub issue for a case where `impact` missed or misreported something. Reads the body from stdin if `--body` is omitted. Without `--submit` this only prints the draft — no network call. `--submit` files it via `gh issue create`, after checking `gh issue list` for an existing report with the same fingerprint. |
 | `impact mcp` | Start the MCP stdio server. Blocks until stdin closes. |
 | `impact gain [--daily\|--weekly\|--monthly] [--json]` | Usage analytics for `index`/`query`/`change`/`diff` (CLI and MCP combined), rolled up by day/week/month and broken down by client. Defaults to monthly. Recorded locally to `~/.impact/analytics.sqlite`; disable with `IMPACT_NO_ANALYTICS=1`. |
 
@@ -120,6 +121,7 @@ Unparseable input is a hard error with a usage hint — never a best-effort gues
 | `impact_file` | Blast radius of a file, optionally extended with `workspace_path` for cross-project matches; `min_confidence: "exact"\|"probable"\|"heuristic"` filters DIRECT/INDIRECT entries; `summary: true` returns the compact grouped-by-file form instead of the full listing. |
 | `impact_change` | Blast radius of a `--change`-style description, same `workspace_path`/`min_confidence`/`summary` support. |
 | `impact_diff` | Blast radius of a unified diff (`diff` argument — the raw text, e.g. `git diff` output), same `workspace_path`/`min_confidence`/`summary` support. |
+| `impact_report_blindspot` | Draft a GitHub issue for a case where `impact` missed or misreported something (`title`, `body`; optional `kind`, `language`, `repo`). Without `submit: true` this only returns the draft — no network call. `submit: true` files it via `gh issue create`, after checking for an existing report with the same fingerprint. |
 
 Only calls `impact` can see syntactically become edges. A call reached through a registry or selector indirection (`getSelectors(state).canSchedule(...)`), or a function handed to something else as a value (`transform: camelizeOrder`) rather than called, leaves no edge — so an empty or thin blast radius is not proof that nothing consumes the symbol. Cross-check the symbol name with `grep` before concluding a change is safe.
 
@@ -189,6 +191,16 @@ approach it" discussion that hasn't settled on a concrete target doesn't need it
 → Re-run `impact_index` (results are only as fresh as the last index), then re-run
   `impact_file`/`impact_change` against the same target to confirm the blast radius you
   addressed matches what's reported now, and nothing new appeared.
+
+## BLIND SPOT FOUND
+*Only after you've manually confirmed — by reading the code or grepping, not by
+assumption — that impact_file/impact_change/impact_diff missed a real caller or
+reported one that doesn't exist.*
+→ Run `impact report-blindspot "<short title>"` (no `--submit`) to draft the report.
+→ Show the drafted title and body to the user and get their explicit go-ahead before
+  ever adding `--submit` — this files a public GitHub issue and is not yours to send
+  unilaterally.
+→ Never report a speculative or unverified gap — only one you've confirmed by hand.
 
 `impact_change` grammar: `rename <path>`, `rename <path> to <path>`, `remove <path>`,
 `remove variant <Enum>::<Variant>`, `remove field <Type>.<field>`, `change signature of

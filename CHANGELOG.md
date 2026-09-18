@@ -19,6 +19,10 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 - The MCP server now exposes `impact_report_blindspot`, mirroring the CLI subcommand
   (`title`, `body`, `kind`, `language`, `repo`, `submit`) for agents that only speak
   MCP.
+- The installed agent rule gained a "BLIND SPOT FOUND" section: only after manually
+  confirming a gap, draft it with `impact report-blindspot`, then get the user's
+  explicit go-ahead before ever passing `--submit`. Reflected in `impact install`'s
+  managed rule block/file and in the README's reproduced copy of the rule text.
 
 ## [0.9.4] - 2026-09-15
 
