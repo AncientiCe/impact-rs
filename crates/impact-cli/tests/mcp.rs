@@ -38,6 +38,37 @@ fn mcp_round_trip(requests: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+/// Same round trip as `mcp_round_trip`, but with extra environment variables set on the
+/// `impact mcp` child process — used to point `IMPACT_GH_BIN` at a fake `gh` script
+/// without touching this test process's own environment.
+fn mcp_round_trip_env(requests: &[Value], envs: &[(&str, &std::path::Path)]) -> Vec<Value> {
+    let input = requests
+        .iter()
+        .map(|r| r.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut cmd = Command::cargo_bin("impact").unwrap();
+    cmd.arg("mcp");
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
+    let output = cmd.write_stdin(input).output().unwrap();
+    assert!(
+        output.status.success(),
+        "impact mcp exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("bad JSON line {line:?}: {e}"))
+        })
+        .collect()
+}
+
 fn tool_call(id: i64, name: &str, arguments: Value) -> Value {
     serde_json::json!({
         "jsonrpc": "2.0",
@@ -82,7 +113,8 @@ fn initialize_and_tools_list_describe_the_server() {
             "impact_index",
             "impact_file",
             "impact_change",
-            "impact_diff"
+            "impact_diff",
+            "impact_report_blindspot"
         ]
     );
 }
@@ -510,5 +542,104 @@ fn impact_file_explain_populates_indirect_via_chain() {
     assert_eq!(
         with_explain["indirect"][0]["via"],
         serde_json::json!(["payment::controller::PaymentController::handle"])
+    );
+}
+
+/// Writes a fake `gh` shell script — same technique as `tests/blindspot.rs`'s CLI-level
+/// version, duplicated here because each integration test file is its own crate. Answers
+/// `issue list` with `list_json`; `issue create` runs `create_body` verbatim, so a test
+/// can fail loudly if `create` is invoked when it shouldn't be.
+fn write_fake_gh(dir: &Path, list_json: &str, create_body: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = dir.join("fake-gh.sh");
+    let script = format!(
+        "#!/bin/sh\nset -e\nif [ \"$1\" = \"issue\" ] && [ \"$2\" = \"list\" ]; then\n  echo '{list_json}'\nelif [ \"$1\" = \"issue\" ] && [ \"$2\" = \"create\" ]; then\n{create_body}\nelse\n  echo \"unexpected gh invocation: $*\" >&2\n  exit 1\nfi\n"
+    );
+    std::fs::write(&path, script).unwrap();
+    let mut perms = std::fs::metadata(&path).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&path, perms).unwrap();
+    path
+}
+
+/// `impact_report_blindspot` without `submit` never touches the network — it only
+/// returns the composed draft, always with `submitted: false`.
+#[test]
+fn report_blindspot_dry_run_returns_a_draft() {
+    let responses = mcp_round_trip(&[tool_call(
+        1,
+        "impact_report_blindspot",
+        serde_json::json!({
+            "title": "misses an indirect call",
+            "body": "impact_file reported no callers, but grep found one.",
+            "kind": "missed-edge",
+            "language": "swift",
+        }),
+    )]);
+
+    let result = tool_result_json(&responses[0]);
+    assert_eq!(result["title"], "misses an indirect call");
+    assert_eq!(result["repo"], "AncientiCe/impact-rs");
+    assert_eq!(result["submitted"], false);
+    assert!(result["body"]
+        .as_str()
+        .unwrap()
+        .contains("impact_file reported no callers"));
+    assert_eq!(result["fingerprint"].as_str().unwrap().len(), 16);
+}
+
+/// `submit: true` with no existing match files a new issue via the (faked) `gh`.
+#[test]
+fn report_blindspot_submit_files_a_new_issue() {
+    let dir = tempfile::tempdir().unwrap();
+    let gh = write_fake_gh(
+        dir.path(),
+        "[]",
+        "  echo 'https://github.com/AncientiCe/impact-rs/issues/999'\n",
+    );
+
+    let responses = mcp_round_trip_env(
+        &[tool_call(
+            1,
+            "impact_report_blindspot",
+            serde_json::json!({"title": "t", "body": "b", "submit": true}),
+        )],
+        &[("IMPACT_GH_BIN", gh.as_path())],
+    );
+
+    let result = tool_result_json(&responses[0]);
+    assert_eq!(result["submitted"], true);
+    assert_eq!(
+        result["url"],
+        "https://github.com/AncientiCe/impact-rs/issues/999"
+    );
+}
+
+/// `submit: true` with a matching fingerprint already on file reports that issue's URL
+/// and never calls `gh issue create` (the fake script fails loudly if it does).
+#[test]
+fn report_blindspot_submit_skips_a_duplicate() {
+    let dir = tempfile::tempdir().unwrap();
+    let gh = write_fake_gh(
+        dir.path(),
+        r#"[{"number":7,"url":"https://github.com/AncientiCe/impact-rs/issues/7","title":"existing"}]"#,
+        "  echo 'issue create should not have been called' >&2\n  exit 1\n",
+    );
+
+    let responses = mcp_round_trip_env(
+        &[tool_call(
+            1,
+            "impact_report_blindspot",
+            serde_json::json!({"title": "t", "body": "b", "submit": true}),
+        )],
+        &[("IMPACT_GH_BIN", gh.as_path())],
+    );
+
+    let result = tool_result_json(&responses[0]);
+    assert_eq!(result["submitted"], false);
+    assert_eq!(
+        result["existing_url"],
+        "https://github.com/AncientiCe/impact-rs/issues/7"
     );
 }

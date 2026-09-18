@@ -15,6 +15,7 @@ use rusqlite::Connection;
 use serde_json::{json, Value};
 
 use crate::analytics;
+use crate::blindspot::{self, BlindspotKind};
 use crate::ops;
 
 /// The MCP client's `clientInfo`, learned from `initialize` and reused to attribute
@@ -86,7 +87,11 @@ fn initialize_result(protocol_version: &str) -> Value {
             the proposal, even if no code has been written yet — vague, exploratory \
             discussion that hasn't settled on a concrete target doesn't need it. Re-run \
             impact_index after the project changes; results are only as fresh as the \
-            last index.",
+            last index. If you manually confirm — by reading the code or grepping, never \
+            by assumption — that one of these tools missed or misreported something, call \
+            impact_report_blindspot (without submit) to draft a report, show it to the \
+            user, and only pass submit after their explicit go-ahead; it files a public \
+            GitHub issue and is never yours to send unilaterally.",
     })
 }
 
@@ -228,6 +233,22 @@ fn tool_list() -> Value {
                 },
                 "required": ["diff"]
             }
+        },
+        {
+            "name": "impact_report_blindspot",
+            "description": "Draft a GitHub issue reporting a case where impact missed or misreported something — only after manually confirming the gap by reading code or grepping, never speculatively. Composing the draft never touches the network; it only returns what would be filed, including a stable fingerprint used to avoid duplicates. Set submit=true to actually file it via `gh issue create` (after first checking `gh issue list` for an existing report with the same fingerprint) — get the user's explicit go-ahead before ever doing that, since it posts something public on their behalf.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Short issue title"},
+                    "body": {"type": "string", "description": "What was expected vs. what impact actually reported"},
+                    "kind": {"type": "string", "enum": ["missed-edge", "false-positive", "crash", "other"], "description": "What kind of gap this is (default: other)"},
+                    "language": {"type": "string", "description": "The language involved, if relevant (e.g. \"swift\", \"go\")"},
+                    "repo": {"type": "string", "description": "The owner/repo this would be filed against (default: AncientiCe/impact-rs)"},
+                    "submit": {"type": "boolean", "description": "Actually file the issue via gh, after checking for a duplicate (default: false — draft only, no network)"}
+                },
+                "required": ["title", "body"]
+            }
         }
     ])
 }
@@ -240,6 +261,7 @@ fn usage_command(tool_name: &str) -> Option<&'static str> {
         "impact_file" => Some("file"),
         "impact_change" => Some("change"),
         "impact_diff" => Some("diff"),
+        "impact_report_blindspot" => Some("report-blindspot"),
         _ => None,
     }
 }
@@ -250,6 +272,7 @@ fn dispatch_tool(name: &str, args: &Value) -> Value {
         "impact_file" => tool_file(args),
         "impact_change" => tool_change(args),
         "impact_diff" => tool_diff(args),
+        "impact_report_blindspot" => tool_report_blindspot(args),
         other => json!({"error": format!("Unknown tool: {other}")}),
     }
 }
@@ -303,6 +326,78 @@ fn ok_or_error<T: serde::Serialize>(result: anyhow::Result<T>) -> Value {
         Ok(value) => {
             serde_json::to_value(value).unwrap_or_else(|e| json!({"error": e.to_string()}))
         }
+        Err(e) => json!({"error": e.to_string()}),
+    }
+}
+
+/// Parses the optional `kind` tool argument for `impact_report_blindspot`, defaulting to
+/// `Other` when absent — mirrors `min_confidence_arg`'s "reject an unrecognized value,
+/// don't silently ignore a typo" behavior.
+fn blindspot_kind_arg(args: &Value) -> Result<BlindspotKind, String> {
+    match args.get("kind").and_then(|v| v.as_str()) {
+        None => Ok(BlindspotKind::Other),
+        Some("missed-edge") => Ok(BlindspotKind::MissedEdge),
+        Some("false-positive") => Ok(BlindspotKind::FalsePositive),
+        Some("crash") => Ok(BlindspotKind::Crash),
+        Some("other") => Ok(BlindspotKind::Other),
+        Some(other) => Err(format!(
+            "kind must be \"missed-edge\", \"false-positive\", \"crash\" or \"other\", got {other:?}"
+        )),
+    }
+}
+
+/// Composes the draft and, when `submit` is set, checks for an existing report before
+/// filing a new one — the same two-step de-duplication as the CLI's `run_report_blindspot`.
+fn tool_report_blindspot(args: &Value) -> Value {
+    let Some(title) = str_arg(args, "title") else {
+        return json!({"error": "title is required"});
+    };
+    let Some(body) = str_arg(args, "body") else {
+        return json!({"error": "body is required"});
+    };
+    let kind = match blindspot_kind_arg(args) {
+        Ok(k) => k,
+        Err(e) => return json!({"error": e}),
+    };
+    let language = str_arg(args, "language");
+    let repo = str_arg(args, "repo").unwrap_or_else(|| "AncientiCe/impact-rs".to_string());
+    let submit = args
+        .get("submit")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let draft = blindspot::compose_draft(&title, &body, kind, language.as_deref(), &repo);
+
+    if !submit {
+        return match serde_json::to_value(&draft) {
+            Ok(mut value) => {
+                value["submitted"] = Value::Bool(false);
+                value
+            }
+            Err(e) => json!({"error": e.to_string()}),
+        };
+    }
+
+    match blindspot::find_existing(&draft.repo, &draft.fingerprint) {
+        Ok(Some(existing)) => match serde_json::to_value(&draft) {
+            Ok(mut value) => {
+                value["submitted"] = Value::Bool(false);
+                value["existing_url"] = Value::String(existing.url);
+                value
+            }
+            Err(e) => json!({"error": e.to_string()}),
+        },
+        Ok(None) => match blindspot::submit(&draft) {
+            Ok(url) => match serde_json::to_value(&draft) {
+                Ok(mut value) => {
+                    value["submitted"] = Value::Bool(true);
+                    value["url"] = Value::String(url);
+                    value
+                }
+                Err(e) => json!({"error": e.to_string()}),
+            },
+            Err(e) => json!({"error": e.to_string()}),
+        },
         Err(e) => json!({"error": e.to_string()}),
     }
 }

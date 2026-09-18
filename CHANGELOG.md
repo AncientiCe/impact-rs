@@ -16,6 +16,9 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   after first checking `gh issue list` for an existing report with the same
   fingerprint so the same gap is never reported twice. The `gh` binary is
   overridable via `IMPACT_GH_BIN` (default: `gh`, resolved from `PATH`).
+- The MCP server now exposes `impact_report_blindspot`, mirroring the CLI subcommand
+  (`title`, `body`, `kind`, `language`, `repo`, `submit`) for agents that only speak
+  MCP.
 
 ## [0.9.4] - 2026-09-15
 
