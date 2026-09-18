@@ -186,6 +186,11 @@ enum Command {
         /// The `owner/repo` this would be filed against.
         #[arg(long, default_value = "AncientiCe/impact-rs")]
         repo: String,
+        /// Actually file the issue via `gh` (after checking for an existing report with
+        /// the same fingerprint). Without this, the draft is only printed — never sent
+        /// anywhere. Get explicit user confirmation before ever passing this.
+        #[arg(long)]
+        submit: bool,
         /// Print machine-readable JSON instead of a human summary.
         #[arg(long)]
         json: bool,
@@ -395,9 +400,10 @@ fn main() -> anyhow::Result<()> {
             kind,
             language,
             repo,
+            submit,
             json,
         } => with_usage_recorded("report-blindspot", || {
-            run_report_blindspot(&title, body, kind, language.as_deref(), &repo, json)
+            run_report_blindspot(&title, body, kind, language.as_deref(), &repo, submit, json)
         }),
         Command::Hook { event } => match event {
             HookEvent::PreToolUse => hook::pre_tool_use(),
@@ -721,12 +727,14 @@ fn run_diff(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_report_blindspot(
     title: &str,
     body: Option<String>,
     kind: Option<BlindspotKind>,
     language: Option<&str>,
     repo: &str,
+    submit: bool,
     json: bool,
 ) -> anyhow::Result<()> {
     let body = match body {
@@ -747,18 +755,42 @@ fn run_report_blindspot(
         repo,
     );
 
-    if json {
-        let mut value = serde_json::to_value(&draft)?;
-        value["submitted"] = serde_json::Value::Bool(false);
-        println!("{}", serde_json::to_string_pretty(&value)?);
+    if !submit {
+        if json {
+            let mut value = serde_json::to_value(&draft)?;
+            value["submitted"] = serde_json::Value::Bool(false);
+            println!("{}", serde_json::to_string_pretty(&value)?);
+            return Ok(());
+        }
+        println!("DRAFT (dry run — pass --submit to file this issue)");
+        println!("repo:  {}", draft.repo);
+        println!("title: {}", draft.title);
+        println!("---");
+        println!("{}", draft.body);
         return Ok(());
     }
 
-    println!("DRAFT (dry run — pass --submit to file this issue)");
-    println!("repo:  {}", draft.repo);
-    println!("title: {}", draft.title);
-    println!("---");
-    println!("{}", draft.body);
+    if let Some(existing) = blindspot::find_existing(&draft.repo, &draft.fingerprint)? {
+        if json {
+            let mut value = serde_json::to_value(&draft)?;
+            value["submitted"] = serde_json::Value::Bool(false);
+            value["existing_url"] = serde_json::Value::String(existing.url.clone());
+            println!("{}", serde_json::to_string_pretty(&value)?);
+        } else {
+            println!("already reported: {}", existing.url);
+        }
+        return Ok(());
+    }
+
+    let url = blindspot::submit(&draft)?;
+    if json {
+        let mut value = serde_json::to_value(&draft)?;
+        value["submitted"] = serde_json::Value::Bool(true);
+        value["url"] = serde_json::Value::String(url.clone());
+        println!("{}", serde_json::to_string_pretty(&value)?);
+    } else {
+        println!("filed: {url}");
+    }
     Ok(())
 }
 

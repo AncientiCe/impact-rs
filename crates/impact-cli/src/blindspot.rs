@@ -4,6 +4,7 @@
 //! so a caller can always see the exact draft before anything is ever sent anywhere.
 //! Submission is a separate, explicit step (see the CLI's `--submit` flag).
 
+use anyhow::Context;
 use clap::ValueEnum;
 
 /// What kind of gap was found. Mirrors the "Blind spot:" callouts already baked into
@@ -78,6 +79,68 @@ pub fn compose_draft(
         body,
         fingerprint,
     }
+}
+
+/// An issue already on file, found via `find_existing`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct ExistingIssue {
+    pub number: u64,
+    pub url: String,
+    pub title: String,
+}
+
+/// The `gh` binary to shell out to — overridable via `IMPACT_GH_BIN` so tests can point
+/// it at a fake script instead of touching the real `gh`/GitHub. Defaults to `"gh"`,
+/// resolved from `PATH` like any other command.
+fn gh_bin() -> String {
+    std::env::var("IMPACT_GH_BIN").unwrap_or_else(|_| "gh".to_string())
+}
+
+/// Searches `repo` for an issue whose body already carries `fingerprint`, so `submit`
+/// never files a duplicate of a gap that's already reported. Returns the first match, if
+/// any; `Ok(None)` means the search ran cleanly and found nothing.
+pub fn find_existing(repo: &str, fingerprint: &str) -> anyhow::Result<Option<ExistingIssue>> {
+    let output = std::process::Command::new(gh_bin())
+        .args(["issue", "list", "--repo", repo, "--state", "all"])
+        .arg("--search")
+        .arg(format!("{fingerprint} in:body"))
+        .args(["--json", "number,url,title"])
+        .output()
+        .context("running `gh issue list` (is `gh` installed?)")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "`gh issue list` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let issues: Vec<ExistingIssue> =
+        serde_json::from_slice(&output.stdout).context("parsing `gh issue list` output")?;
+    Ok(issues.into_iter().next())
+}
+
+/// Files `draft` as a new issue via `gh issue create`, returning the created issue's
+/// URL. Callers should run `find_existing` first — this never checks for duplicates
+/// itself.
+pub fn submit(draft: &BlindspotDraft) -> anyhow::Result<String> {
+    let output = std::process::Command::new(gh_bin())
+        .args(["issue", "create", "--repo", &draft.repo])
+        .arg("--title")
+        .arg(&draft.title)
+        .arg("--body")
+        .arg(&draft.body)
+        .output()
+        .context("running `gh issue create` (is `gh` installed and authenticated?)")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "`gh issue create` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if url.is_empty() {
+        anyhow::bail!("`gh issue create` produced no output");
+    }
+    Ok(url)
 }
 
 #[cfg(test)]

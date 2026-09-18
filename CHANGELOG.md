@@ -12,6 +12,10 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   Composition is pure and offline — it only prints the draft, including a stable
   fingerprint for later de-duplication; nothing is ever sent to GitHub by this
   subcommand alone.
+- `impact report-blindspot --submit` files the drafted issue via `gh issue create`,
+  after first checking `gh issue list` for an existing report with the same
+  fingerprint so the same gap is never reported twice. The `gh` binary is
+  overridable via `IMPACT_GH_BIN` (default: `gh`, resolved from `PATH`).
 
 ## [0.9.4] - 2026-09-15
 
