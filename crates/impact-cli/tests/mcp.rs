@@ -545,22 +545,27 @@ fn impact_file_explain_populates_indirect_via_chain() {
     );
 }
 
-/// Writes a fake `gh` shell script — same technique as `tests/blindspot.rs`'s CLI-level
-/// version, duplicated here because each integration test file is its own crate. Answers
-/// `issue list` with `list_json`; `issue create` runs `create_body` verbatim, so a test
-/// can fail loudly if `create` is invoked when it shouldn't be.
-fn write_fake_gh(dir: &Path, list_json: &str, create_body: &str) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
+/// What the fake `gh issue create` invocation should do — `Some(url)` "succeeds" and
+/// prints it, `None` means creation must never be invoked in this test.
+type FakeGhCreate<'a> = Option<&'a str>;
 
-    let path = dir.join("fake-gh.sh");
-    let script = format!(
-        "#!/bin/sh\nset -e\nif [ \"$1\" = \"issue\" ] && [ \"$2\" = \"list\" ]; then\n  echo '{list_json}'\nelif [ \"$1\" = \"issue\" ] && [ \"$2\" = \"create\" ]; then\n{create_body}\nelse\n  echo \"unexpected gh invocation: $*\" >&2\n  exit 1\nfi\n"
-    );
-    std::fs::write(&path, script).unwrap();
-    let mut perms = std::fs::metadata(&path).unwrap().permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&path, perms).unwrap();
-    path
+/// Points `impact` at `crates/impact-cli/src/bin/fake_gh.rs` (a real compiled process,
+/// not a `/bin/sh`/`cmd.exe` script — see that file's module doc for why a script can't
+/// do this job on Windows) and writes the JSON config file it reads its behavior from —
+/// same technique as `tests/blindspot.rs`'s CLI-level version, duplicated here because
+/// each integration test file is its own crate. `issue list` answers with `list_json`;
+/// `issue create` behaves per `create`. Returns `(gh_bin, config_path)` — the caller sets
+/// both as env vars (`IMPACT_GH_BIN`, `FAKE_GH_CONFIG`) on the `impact mcp` invocation.
+fn write_fake_gh(
+    dir: &Path,
+    list_json: &str,
+    create: FakeGhCreate,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let gh_bin = std::path::PathBuf::from(std::env::var("CARGO_BIN_EXE_fake_gh").unwrap());
+    let config_path = dir.join("fake-gh-config.json");
+    let config = serde_json::json!({"list_json": list_json, "create_url": create});
+    std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    (gh_bin, config_path)
 }
 
 /// `impact_report_blindspot` files a public GitHub issue on the user's behalf, but the
@@ -629,10 +634,10 @@ fn report_blindspot_dry_run_returns_a_draft() {
 #[test]
 fn report_blindspot_submit_files_a_new_issue() {
     let dir = tempfile::tempdir().unwrap();
-    let gh = write_fake_gh(
+    let (gh, gh_config) = write_fake_gh(
         dir.path(),
         "[]",
-        "  echo 'https://github.com/AncientiCe/impact-rs/issues/999'\n",
+        Some("https://github.com/AncientiCe/impact-rs/issues/999"),
     );
 
     let responses = mcp_round_trip_env(
@@ -641,7 +646,10 @@ fn report_blindspot_submit_files_a_new_issue() {
             "impact_report_blindspot",
             serde_json::json!({"title": "t", "body": "b", "submit": true}),
         )],
-        &[("IMPACT_GH_BIN", gh.as_path())],
+        &[
+            ("IMPACT_GH_BIN", gh.as_path()),
+            ("FAKE_GH_CONFIG", gh_config.as_path()),
+        ],
     );
 
     let result = tool_result_json(&responses[0]);
@@ -653,14 +661,14 @@ fn report_blindspot_submit_files_a_new_issue() {
 }
 
 /// `submit: true` with a matching fingerprint already on file reports that issue's URL
-/// and never calls `gh issue create` (the fake script fails loudly if it does).
+/// and never calls `gh issue create` (the fake `gh` fails loudly if it does).
 #[test]
 fn report_blindspot_submit_skips_a_duplicate() {
     let dir = tempfile::tempdir().unwrap();
-    let gh = write_fake_gh(
+    let (gh, gh_config) = write_fake_gh(
         dir.path(),
         r#"[{"number":7,"url":"https://github.com/AncientiCe/impact-rs/issues/7","title":"existing"}]"#,
-        "  echo 'issue create should not have been called' >&2\n  exit 1\n",
+        None,
     );
 
     let responses = mcp_round_trip_env(
@@ -669,7 +677,10 @@ fn report_blindspot_submit_skips_a_duplicate() {
             "impact_report_blindspot",
             serde_json::json!({"title": "t", "body": "b", "submit": true}),
         )],
-        &[("IMPACT_GH_BIN", gh.as_path())],
+        &[
+            ("IMPACT_GH_BIN", gh.as_path()),
+            ("FAKE_GH_CONFIG", gh_config.as_path()),
+        ],
     );
 
     let result = tool_result_json(&responses[0]);

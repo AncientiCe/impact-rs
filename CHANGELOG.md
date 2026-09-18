@@ -27,6 +27,24 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   of the miss (language, rough counts, kind of construct) instead, since the draft
   files against a public repo while `impact` itself runs on private codebases.
 
+### Fixed
+
+- `crates/impact-cli/tests/blindspot.rs` and `tests/mcp.rs` no longer require a POSIX
+  shell to compile or run their `--submit` tests. The fake `gh` stand-in they shelled
+  out to was an unconditional `std::os::unix::fs::PermissionsExt` script, which failed
+  to even compile on Windows; replaced with a real compiled test binary
+  (`src/bin/fake_gh.rs`, driven by a small JSON config file) so there's no shell/batch
+  script at all — a `.bat`/`.cmd` script couldn't have worked here anyway, since
+  Windows refuses to spawn a batch file with the multi-line, markdown-carrying `--body`
+  argument `impact report-blindspot --submit` actually passes to `gh issue create`.
+- Added `.gitattributes` (`* text=auto eol=lf`) so a Windows checkout with
+  `core.autocrlf=true` can no longer convert tracked sources to CRLF. Without it,
+  `install/rule.rs`'s `RULE_BODY` — a raw multi-line string literal — silently
+  embedded whatever line ending was physically checked out in `rule.rs`, making
+  `impact install`'s output (and the `readme_publishes_the_installed_rule_text_verbatim`
+  test comparing it against `README.md`) diverge from the actually-committed content on
+  a Windows dev machine even though nothing was really stale.
+
 ## [0.10.0] - 2026-09-18
 
 ### Added

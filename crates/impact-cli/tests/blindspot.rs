@@ -1,26 +1,26 @@
-use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
 use predicates::prelude::*;
 use predicates::str::contains;
 use serde_json::Value;
 
-/// Writes a fake `gh` shell script to `dir` that answers `issue list` with `list_json`
-/// and, on `issue create`, runs `create_body` verbatim — so a test can either have it
-/// print a fake issue URL, or fail loudly if `create` gets called when it shouldn't.
-/// Any other invocation is itself a test failure (`exit 1`) rather than silently
-/// succeeding.
-fn write_fake_gh(dir: &Path, list_json: &str, create_body: &str) -> std::path::PathBuf {
-    let path = dir.join("fake-gh.sh");
-    let script = format!(
-        "#!/bin/sh\nset -e\nif [ \"$1\" = \"issue\" ] && [ \"$2\" = \"list\" ]; then\n  echo '{list_json}'\nelif [ \"$1\" = \"issue\" ] && [ \"$2\" = \"create\" ]; then\n{create_body}\nelse\n  echo \"unexpected gh invocation: $*\" >&2\n  exit 1\nfi\n"
-    );
-    std::fs::write(&path, script).unwrap();
-    let mut perms = std::fs::metadata(&path).unwrap().permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&path, perms).unwrap();
-    path
+/// What the fake `gh issue create` invocation should do — `Some(url)` "succeeds" and
+/// prints it, `None` means creation must never be invoked in this test.
+type FakeGhCreate<'a> = Option<&'a str>;
+
+/// Points `impact` at `crates/impact-cli/src/bin/fake_gh.rs` (a real compiled process,
+/// not a `/bin/sh`/`cmd.exe` script — see that file's module doc for why a script can't
+/// do this job on Windows) and writes the JSON config file it reads its behavior from:
+/// `issue list` answers with `list_json`; `issue create` behaves per `create`. Returns
+/// `(gh_bin, config_path)` — the caller sets both as env vars (`IMPACT_GH_BIN`,
+/// `FAKE_GH_CONFIG`) on the `impact` invocation under test.
+fn write_fake_gh(dir: &Path, list_json: &str, create: FakeGhCreate) -> (PathBuf, PathBuf) {
+    let gh_bin = PathBuf::from(std::env::var("CARGO_BIN_EXE_fake_gh").unwrap());
+    let config_path = dir.join("fake-gh-config.json");
+    let config = serde_json::json!({"list_json": list_json, "create_url": create});
+    std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    (gh_bin, config_path)
 }
 
 /// `impact report-blindspot` never touches the network by default — it only composes
@@ -142,10 +142,10 @@ fn kind_and_repo_default_when_omitted() {
 #[test]
 fn submit_files_a_new_issue_when_none_exists_yet() {
     let dir = tempfile::tempdir().unwrap();
-    let gh = write_fake_gh(
+    let (gh, gh_config) = write_fake_gh(
         dir.path(),
         "[]",
-        "  echo 'https://github.com/AncientiCe/impact-rs/issues/999'\n",
+        Some("https://github.com/AncientiCe/impact-rs/issues/999"),
     );
 
     let output = Command::cargo_bin("impact")
@@ -159,6 +159,7 @@ fn submit_files_a_new_issue_when_none_exists_yet() {
             "--json",
         ])
         .env("IMPACT_GH_BIN", &gh)
+        .env("FAKE_GH_CONFIG", &gh_config)
         .output()
         .unwrap();
     assert!(
@@ -177,14 +178,14 @@ fn submit_files_a_new_issue_when_none_exists_yet() {
 
 /// `--submit` checks for an existing issue with the same fingerprint first — a match
 /// means it reports that issue's URL and never calls `gh issue create` at all (the fake
-/// script fails loudly if `create` is invoked, so a passing test proves it wasn't).
+/// `gh` fails loudly if `create` is invoked, so a passing test proves it wasn't).
 #[test]
 fn submit_finds_an_existing_report_and_skips_creating_a_duplicate() {
     let dir = tempfile::tempdir().unwrap();
-    let gh = write_fake_gh(
+    let (gh, gh_config) = write_fake_gh(
         dir.path(),
         r#"[{"number":42,"url":"https://github.com/AncientiCe/impact-rs/issues/42","title":"existing"}]"#,
-        "  echo 'issue create should not have been called' >&2\n  exit 1\n",
+        None,
     );
 
     let output = Command::cargo_bin("impact")
@@ -198,6 +199,7 @@ fn submit_finds_an_existing_report_and_skips_creating_a_duplicate() {
             "--json",
         ])
         .env("IMPACT_GH_BIN", &gh)
+        .env("FAKE_GH_CONFIG", &gh_config)
         .output()
         .unwrap();
     assert!(

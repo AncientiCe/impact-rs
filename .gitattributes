@@ -1,0 +1,8 @@
+# Normalize to LF in the repository and on checkout, regardless of a contributor's own
+# core.autocrlf setting. Without this, a Windows checkout with core.autocrlf=true
+# converts tracked text files (including .rs sources) to CRLF on disk; a multi-line raw
+# string literal (e.g. install/rule.rs's RULE_BODY) then embeds whatever line ending was
+# physically in the source file at compile time, silently producing CRLF output on
+# Windows builds and making local test runs diverge from what's actually committed (LF)
+# and what CI (Linux) checks out and sees.
+* text=auto eol=lf
