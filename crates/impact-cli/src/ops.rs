@@ -9,6 +9,7 @@ use impact_core::{
     Cache, ChangeSpec, DetectorConfig, ImpactReport, IndexConfig, IndexStats, Indexer,
     LanguageAdapter, Workspace, WorkspaceImpactReport,
 };
+use impact_lang_cpp::CppAdapter;
 use impact_lang_go::GoAdapter;
 use impact_lang_kotlin::KotlinAdapter;
 use impact_lang_python::PythonAdapter;
@@ -49,6 +50,7 @@ pub fn index_project(
     let go_adapter = GoAdapter::new(config);
     let kotlin_adapter = KotlinAdapter;
     let swift_adapter = SwiftAdapter;
+    let cpp_adapter = CppAdapter;
     let adapters: Vec<&dyn LanguageAdapter> = vec![
         &rust_adapter,
         &ts_adapter,
@@ -56,6 +58,7 @@ pub fn index_project(
         &go_adapter,
         &kotlin_adapter,
         &swift_adapter,
+        &cpp_adapter,
     ];
     let index_config = IndexConfig::load(&project_root)?;
     let indexer = Indexer::new(project_id, adapters).with_exclude(index_config.exclude);

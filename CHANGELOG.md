@@ -4,6 +4,20 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- `impact-lang-cpp`: a C++ `LanguageAdapter` (`.cpp`, `.cc`, `.cxx`, `.c++`, `.hpp`,
+  `.hh`, `.hxx`, `.h`). Indexes free functions, classes/structs, and methods —
+  including out-of-line `Type::method() { ... }` definitions, the dominant real-world
+  C++ pattern where a header only declares a prototype and a `.cpp` file defines it.
+  Unresolved bare calls fall back to project-wide structural resolution (`Unscoped`,
+  the same choice `impact-lang-swift` makes) since C++'s `#include` gives an adapter
+  no file-level import to narrow a name the way `use`/`import` does elsewhere. No test
+  detection (GoogleTest/Catch2/Boost.Test are library macros, not core-language
+  syntax) and no contract detection yet — both honestly empty, not stubbed. Fixes a
+  reported blind spot where a large C++ tree (hundreds of `.cpp`/`.h` files) indexed
+  as 0-1 files because no adapter claimed those extensions at all.
+
 ### Changed
 
 - `impact_report_blindspot` (CLI `report-blindspot` and its MCP tool) now tells the
