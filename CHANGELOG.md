@@ -2,6 +2,18 @@
 
 All notable changes to `impact` are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- `impact-lang-cpp`: a call from a function nested inside `namespace outer { namespace
+  inner { ... } }` to another function elsewhere in the project (by bare name) was
+  silently dropped as a caller. `collect_refs`'s namespace traversal didn't extend the
+  qualified-path prefix the way `extract_symbols`'s `walk` does, so the caller's
+  `from_qualified_path` omitted its own namespace segments and the linker's resolver
+  (which needs an exact, last-two-segment, or short-name match) found nothing to attach
+  the edge to. Fixes [#4](https://github.com/AncientiCe/impact-rs/issues/4).
+
 ## [0.11.0] - 2026-09-18
 
 ### Added

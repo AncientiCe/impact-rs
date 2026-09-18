@@ -386,6 +386,15 @@ fn collect_refs(
                     collect_refs(body, source, &new_prefix, current_fn, scope, out);
                 }
             }
+            "namespace_definition" => {
+                let new_prefix = match field_text(child, "name", source) {
+                    Some(name) => join_path(prefix, name),
+                    None => prefix.to_string(),
+                };
+                if let Some(body) = child.child_by_field_name("body") {
+                    collect_refs(body, source, &new_prefix, current_fn, scope, out);
+                }
+            }
             "call_expression" => {
                 if let (Some(from), Some(func)) =
                     (current_fn, child.child_by_field_name("function"))
