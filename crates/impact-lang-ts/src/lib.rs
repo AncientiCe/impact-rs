@@ -864,6 +864,23 @@ fn contains_call(node: Node) -> bool {
     false
 }
 
+/// Whether this subtree contains an array literal — the test for "might this initializer
+/// be a registry of function values?" (`const sagas = [fooSaga, barSaga]`). Mirrors
+/// `contains_call`'s shape and purpose: a top-level binding with no enclosing function is
+/// otherwise the only thing a reference found inside it could be attributed to.
+fn contains_array(node: Node) -> bool {
+    if node.kind() == "array" {
+        return true;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if contains_array(child) {
+            return true;
+        }
+    }
+    false
+}
+
 /// The rightmost identifier-like leaf in a callee expression: `foo` for `foo()`, `method`
 /// for `t.method()` (a `member_expression`). Same structural, non-type-aware approach as
 /// `impact-lang-rust`'s `last_identifier_text`, for the same reason: it's the name the
@@ -965,8 +982,60 @@ fn collect_refs(
                     collect_refs(callee, source, prefix, current_fn, is_test_file, scope, out);
                 }
                 if let Some(args) = child.child_by_field_name("arguments") {
+                    // A bare identifier handed as a call argument (`testRunner(theFunction)`,
+                    // a saga-testing library's entry point invoking its argument internally)
+                    // is a value reference, not a call — the call target extraction above
+                    // only ever sees `testRunner`, never `theFunction`. Same shape and same
+                    // `References` edge kind as the jsx_attribute/pair/shorthand cases below,
+                    // just for a plain positional argument instead of a prop or object value.
+                    if let Some(from) = current_fn {
+                        let mut inner = args.walk();
+                        for argument in args.children(&mut inner) {
+                            if argument.kind() != "identifier" {
+                                continue;
+                            }
+                            if let Ok(name) = argument.utf8_text(source) {
+                                let to_target = scope.bare(name);
+                                if !matches!(to_target, RefTarget::Opaque) {
+                                    out.push(RefDecl {
+                                        from_qualified_path: from.to_string(),
+                                        to_name: name.to_string(),
+                                        kind: EdgeKind::References,
+                                        to_target,
+                                    });
+                                }
+                            }
+                        }
+                    }
                     collect_refs(args, source, prefix, current_fn, is_test_file, scope, out);
                 }
+            }
+            // A bare identifier as an array element (`const sagas = [fooSaga, barSaga]`) —
+            // the registry shape a redux-saga-style `array.map(fn => spawn(fn))` root saga
+            // uses. The array itself carries the real references; the `.map` callback's
+            // parameter is just a local rebinding of whichever element is being iterated,
+            // so nothing further is needed once the array's own elements are captured here.
+            "array" => {
+                if let Some(from) = current_fn {
+                    let mut inner = child.walk();
+                    for element in child.children(&mut inner) {
+                        if element.kind() != "identifier" {
+                            continue;
+                        }
+                        if let Ok(name) = element.utf8_text(source) {
+                            let to_target = scope.bare(name);
+                            if !matches!(to_target, RefTarget::Opaque) {
+                                out.push(RefDecl {
+                                    from_qualified_path: from.to_string(),
+                                    to_name: name.to_string(),
+                                    kind: EdgeKind::References,
+                                    to_target,
+                                });
+                            }
+                        }
+                    }
+                }
+                collect_refs(child, source, prefix, current_fn, is_test_file, scope, out);
             }
             "class_declaration" => {
                 if let (Some(name), Some(body)) = (
@@ -1108,11 +1177,17 @@ fn collect_refs_fn_valued_declarators(
                     out,
                 );
             }
-            // Not a function, but its initializer may still run a call — and at the top
-            // level (`current_fn` is `None`) the binding is the only thing that call can
-            // be attributed to. Inside a function the enclosing function is the better
-            // answer, so nothing changes there.
-            (Some(name), None) if current_fn.is_none() && contains_call(declarator) => {
+            // Not a function, but its initializer may still run a call, or be (or
+            // contain) an array literal — a saga/event-handler registry
+            // (`const sagas = [fooSaga, barSaga]`) is the same "value, not a call" shape
+            // as the JSX-attribute/object-literal cases below, just inside an array. At
+            // the top level (`current_fn` is `None`) the binding is the only thing either
+            // can be attributed to. Inside a function the enclosing function is the
+            // better answer, so nothing changes there.
+            (Some(name), None)
+                if current_fn.is_none()
+                    && (contains_call(declarator) || contains_array(declarator)) =>
+            {
                 let qualified = join_path(prefix, name);
                 collect_refs(
                     declarator,

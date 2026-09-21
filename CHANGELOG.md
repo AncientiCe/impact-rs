@@ -2,6 +2,19 @@
 
 All notable changes to `impact` are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- `impact-lang-ts`: a function handed off as a *value* — put into an array literal
+  registry (`const sagas = [fooSaga, barSaga]`, the shape a redux-saga-style
+  `array.map(fn => spawn(fn))` root saga uses) or passed directly as a call's
+  argument (`testRunner(theFunction)`, a test-runner/saga-testing entry point that
+  invokes its argument internally) — produced no edge at all, since `collect_refs`
+  only ever recognized a bare identifier as a value reference inside a JSX attribute
+  or an object literal. Both shapes now emit the same `References` edge kind those
+  do. Fixes [#5](https://github.com/AncientiCe/impact-rs/issues/5).
+
 ## [0.11.1] - 2026-09-18
 
 ### Fixed
