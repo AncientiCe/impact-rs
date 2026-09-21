@@ -33,7 +33,15 @@
 //! `push_fn_valued_declarators`/`collect_refs_fn_valued_declarators`), since that's the
 //! dominant style for React/React Native components and hooks; an unnamed arrow/function
 //! expression (e.g. passed inline as a callback argument) still isn't a symbol of its own,
-//! same as it never was. Detects tests by file-naming convention only (`is_test_file`)
+//! same as it never was. Nor is a generator only `function foo() {}`'s non-generator
+//! sibling: `function* foo() {}` parses as its own distinct node kind
+//! (`generator_function_declaration`, `generator_function` for the expression form)
+//! rather than a flag on `function_declaration`/`function_expression`, so it's matched
+//! everywhere those are — this is the entire redux-saga convention (`function* mySaga()`),
+//! previously invisible to this adapter in full: not indexed, not a scope, calls inside
+//! its body never attributed, confirmed by a real 2800-file React Native app indexing
+//! zero symbols for a file containing only one. Detects tests by file-naming convention
+//! only (`is_test_file`)
 //! — every JS/TS test framework's own *call*-based marker (`test()`/`it()`, `describe`
 //! blocks) varies enough between Jest/Vitest/Mocha that guessing at one would be worse
 //! than not detecting it, but `*.test.*`/`*.spec.*`/`__tests__/` is a naming convention
@@ -259,7 +267,9 @@ fn default_export_target(export_stmt: Node, source: &[u8], prefix: &str) -> Opti
     let value = export_stmt.named_child(0)?;
     let name = match value.kind() {
         "identifier" => value.utf8_text(source).ok()?,
-        "function_declaration" | "class_declaration" => field_text(value, "name", source)?,
+        "function_declaration" | "generator_function_declaration" | "class_declaration" => {
+            field_text(value, "name", source)?
+        }
         _ => return None,
     };
     Some(join_path(prefix, name))
@@ -563,7 +573,7 @@ fn require_specifier(value: Node, source: &[u8]) -> Option<String> {
 /// tied to this file rather than to a same-named symbol elsewhere.
 fn declare_locals(node: Node, source: &[u8], scope: &mut FileScope) {
     match node.kind() {
-        "function_declaration" | "class_declaration" => {
+        "function_declaration" | "generator_function_declaration" | "class_declaration" => {
             if let Some(name) = field_text(node, "name", source) {
                 scope.declare_local(name);
             }
@@ -692,7 +702,7 @@ fn walk(node: Node, source: &[u8], prefix: &str, is_test_file: bool, out: &mut V
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
-            "function_declaration" => {
+            "function_declaration" | "generator_function_declaration" => {
                 if let Some(name) = field_text(child, "name", source) {
                     push(out, NodeKind::Function, prefix, name, child, is_test_file);
                 }
@@ -795,9 +805,12 @@ fn push_fn_valued_declarators(
         if declarator.kind() != "variable_declarator" {
             continue;
         }
-        let is_fn_value = declarator
-            .child_by_field_name("value")
-            .is_some_and(|v| matches!(v.kind(), "arrow_function" | "function_expression"));
+        let is_fn_value = declarator.child_by_field_name("value").is_some_and(|v| {
+            matches!(
+                v.kind(),
+                "arrow_function" | "function_expression" | "generator_function"
+            )
+        });
         if !is_fn_value {
             continue;
         }
@@ -838,7 +851,10 @@ fn push_call_valued_declarators(
         let Some(value) = declarator.child_by_field_name("value") else {
             continue;
         };
-        if matches!(value.kind(), "arrow_function" | "function_expression") {
+        if matches!(
+            value.kind(),
+            "arrow_function" | "function_expression" | "generator_function"
+        ) {
             continue;
         }
         if !contains_call(value) {
@@ -919,7 +935,7 @@ fn collect_refs(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
-            "function_declaration" | "method_definition" => {
+            "function_declaration" | "generator_function_declaration" | "method_definition" => {
                 if let Some(name) = field_text(child, "name", source) {
                     let qualified = join_path(prefix, name);
                     if let Some(body) = child.child_by_field_name("body") {
@@ -1161,9 +1177,12 @@ fn collect_refs_fn_valued_declarators(
         if declarator.kind() != "variable_declarator" {
             continue;
         }
-        let fn_value = declarator
-            .child_by_field_name("value")
-            .filter(|v| matches!(v.kind(), "arrow_function" | "function_expression"));
+        let fn_value = declarator.child_by_field_name("value").filter(|v| {
+            matches!(
+                v.kind(),
+                "arrow_function" | "function_expression" | "generator_function"
+            )
+        });
         match (field_text(declarator, "name", source), fn_value) {
             (Some(name), Some(value)) => {
                 let qualified = join_path(prefix, name);

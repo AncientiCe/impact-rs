@@ -14,6 +14,15 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   only ever recognized a bare identifier as a value reference inside a JSX attribute
   or an object literal. Both shapes now emit the same `References` edge kind those
   do. Fixes [#5](https://github.com/AncientiCe/impact-rs/issues/5).
+- `impact-lang-ts`: `function* foo() {}` (and the `const foo = function* () {}`
+  expression form) was completely invisible to this adapter — not indexed as a
+  symbol, not tracked as a function scope, calls inside its body never attributed,
+  and nothing could be reported as calling it — because a generator function parses
+  as its own distinct tree-sitter node kind, never `function_declaration`/
+  `function_expression`. Found while verifying the fix above against the real app
+  that reported issue #5: every redux-saga generator in it was blind to
+  `impact_file`/`impact_diff` regardless of that fix, since the enclosing scope
+  never existed in the first place.
 
 ## [0.11.1] - 2026-09-18
 
