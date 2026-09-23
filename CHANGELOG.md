@@ -2,6 +2,20 @@
 
 All notable changes to `impact` are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- `impact-lang-ts`: a JSX tag name (`<Screen>`, or the namespaced form
+  `<Screen.Scrollable>` a component exported via `Object.assign(Base, { Variant })`
+  is reached through) produced no edge at all — `collect_refs` already turned a bare
+  identifier handed off as a JSX attribute value, an object-literal value, an array
+  element, or a call argument into a `References` edge, but never did the same for
+  the tag name itself, the single most common way a React/React Native component is
+  actually consumed. A shared component rendered almost exclusively as a JSX tag
+  (rather than passed around as a value) reported a drastically undersized blast
+  radius as a result. Fixes [#6](https://github.com/AncientiCe/impact-rs/issues/6).
+
 ## [0.11.2] - 2026-09-21
 
 ### Fixed

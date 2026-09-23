@@ -289,6 +289,21 @@ fn jsx_attribute_value_identifier(attribute: Node) -> Option<Node> {
     (inner.kind() == "identifier").then_some(inner)
 }
 
+/// The base identifier a JSX tag name resolves through — confirmed via a real parse-tree
+/// dump: `jsx_opening_element`/`jsx_self_closing_element` expose it as a `name` field,
+/// either a plain `identifier` (`<Screen>`) or a `member_expression` (`<Screen.Scrollable>`,
+/// the shape a component exported via `Object.assign(Base, { Variant })` is reached
+/// through). For the member-expression form, the imported binding is the left-most
+/// `object` (`Screen`), not the `property` being accessed on it — recurses to reach it
+/// through arbitrarily nested namespaced tags (`<A.B.C>`).
+fn jsx_tag_name_identifier(name: Node) -> Option<Node> {
+    match name.kind() {
+        "identifier" => Some(name),
+        "member_expression" => jsx_tag_name_identifier(name.child_by_field_name("object")?),
+        _ => None,
+    }
+}
+
 /// Whether every function/method declared in this file should be marked a test, by the
 /// file-naming convention Jest, Vitest, and Mocha all share (unlike a call-based
 /// convention like `test()`/`it()`, which varies enough between those frameworks that
@@ -1092,6 +1107,34 @@ fn collect_refs(
             "jsx_attribute" => {
                 if let Some(from) = current_fn {
                     if let Some(identifier) = jsx_attribute_value_identifier(child) {
+                        if let Ok(name) = identifier.utf8_text(source) {
+                            let to_target = scope.bare(name);
+                            if !matches!(to_target, RefTarget::Opaque) {
+                                out.push(RefDecl {
+                                    from_qualified_path: from.to_string(),
+                                    to_name: name.to_string(),
+                                    kind: EdgeKind::References,
+                                    to_target,
+                                });
+                            }
+                        }
+                    }
+                }
+                collect_refs(child, source, prefix, current_fn, is_test_file, scope, out);
+            }
+            // A JSX tag name itself (`<Screen>`, `<Screen.Scrollable>`) — the single most
+            // common way a React/React Native component is actually consumed, and,
+            // distinctly from every other data-position case above, never a call, an
+            // attribute value, or an object-literal value at all. `jsx_attribute`'s own
+            // handling only ever sees a value passed *into* a tag (`component={Foo}`), not
+            // the tag itself, so a component only ever rendered as `<Foo>` produced no
+            // edge before this arm existed.
+            "jsx_opening_element" | "jsx_self_closing_element" => {
+                if let Some(from) = current_fn {
+                    if let Some(identifier) = child
+                        .child_by_field_name("name")
+                        .and_then(jsx_tag_name_identifier)
+                    {
                         if let Ok(name) = identifier.utf8_text(source) {
                             let to_target = scope.bare(name);
                             if !matches!(to_target, RefTarget::Opaque) {
