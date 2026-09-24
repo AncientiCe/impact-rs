@@ -11,7 +11,8 @@ pub mod scope;
 pub mod workspace;
 
 pub use adapter::{
-    ContractRef, ContractRole, FileAst, LanguageAdapter, RefDecl, RefTarget, SymbolDecl,
+    ContractRef, ContractRole, FileAst, LanguageAdapter, PackageDecl, PackageDependency, RefDecl,
+    RefTarget, SymbolDecl,
 };
 pub use cache::Cache;
 pub use change::{parse_change, ChangeSpec, ParseChangeError};

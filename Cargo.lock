@@ -488,6 +488,7 @@ dependencies = [
  "anyhow",
  "impact-core",
  "tempfile",
+ "toml",
  "tree-sitter",
  "tree-sitter-rust",
 ]

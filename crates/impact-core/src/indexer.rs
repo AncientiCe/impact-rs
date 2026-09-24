@@ -6,7 +6,7 @@ use anyhow::Result;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 
-use crate::adapter::LanguageAdapter;
+use crate::adapter::{LanguageAdapter, PackageDecl};
 use crate::cache::Cache;
 use crate::graph::{ContractKind, Edge, EdgeKind, Node, NodeId, NodeKind, SymbolGraph};
 
@@ -137,7 +137,12 @@ impl<'a> Indexer<'a> {
         let events_before = event_wiring(&before_graph, before_graph.edges());
 
         let routed = self.build_routes()?;
+        let manifests = self.build_manifest_routes()?;
         let exclude = self.build_exclude()?;
+        // Re-read on every run rather than cached: a manifest isn't a source file with
+        // symbols of its own, and a package boundary has to be current for the edges
+        // this run recomputes from scratch anyway.
+        let mut packages: Vec<(String, PackageDecl)> = Vec::new();
         // Every file this run found and claimed for an adapter, whether it was re-parsed
         // or skipped as unchanged — the set `prune_missing` diffs the cache against.
         let mut seen: HashSet<String> = HashSet::new();
@@ -163,6 +168,15 @@ impl<'a> Indexer<'a> {
 
             if exclude.is_match(&rel_str) {
                 continue;
+            }
+
+            for (adapter, globs) in &manifests {
+                if globs.is_match(&rel_str) {
+                    let content = std::fs::read_to_string(path)?;
+                    if let Some(package) = adapter.parse_manifest(rel, &content) {
+                        packages.push((adapter.language_id().to_string(), package));
+                    }
+                }
             }
 
             let Some(adapter) = routed
@@ -270,7 +284,7 @@ impl<'a> Indexer<'a> {
             cache.upsert_nodes(&synthesized)?;
         }
 
-        let edges = crate::linker::link(&graph, &all_refs, &all_contract_refs);
+        let edges = crate::linker::link(&graph, &all_refs, &all_contract_refs, &packages);
         cache.replace_edges(&edges)?;
 
         stats.orphaned_events = event_diff(&events_before, &event_wiring(&graph, &edges));
@@ -285,6 +299,20 @@ impl<'a> Indexer<'a> {
             .map(|adapter| {
                 let mut builder = GlobSetBuilder::new();
                 for pattern in adapter.file_globs() {
+                    builder.add(Glob::new(pattern)?);
+                }
+                Ok((*adapter, builder.build()?))
+            })
+            .collect()
+    }
+
+    fn build_manifest_routes(&self) -> Result<Vec<(&'a dyn LanguageAdapter, GlobSet)>> {
+        self.adapters
+            .iter()
+            .filter(|adapter| !adapter.manifest_globs().is_empty())
+            .map(|adapter| {
+                let mut builder = GlobSetBuilder::new();
+                for pattern in adapter.manifest_globs() {
                     builder.add(Glob::new(pattern)?);
                 }
                 Ok((*adapter, builder.build()?))

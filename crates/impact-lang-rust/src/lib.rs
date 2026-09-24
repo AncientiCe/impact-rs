@@ -3,7 +3,8 @@ use std::path::Path;
 
 use impact_core::{
     ContractKind, ContractRef, ContractRole, DetectorConfig, EdgeKind, EventStrategy, FileAst,
-    FileScope, LanguageAdapter, NodeKind, RefDecl, RefTarget, SymbolDecl,
+    FileScope, LanguageAdapter, NodeKind, PackageDecl, PackageDependency, RefDecl, RefTarget,
+    SymbolDecl,
 };
 use tree_sitter::Node;
 
@@ -36,6 +37,14 @@ impl LanguageAdapter for RustAdapter {
         &["**/*.rs"]
     }
 
+    fn manifest_globs(&self) -> &[&str] {
+        &["**/Cargo.toml"]
+    }
+
+    fn parse_manifest(&self, path: &Path, source: &str) -> Option<PackageDecl> {
+        parse_cargo_manifest(&path.to_string_lossy().replace('\\', "/"), source)
+    }
+
     fn parse_file(&self, path: &Path, source: &str) -> anyhow::Result<FileAst> {
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&Self::language())?;
@@ -64,8 +73,9 @@ impl LanguageAdapter for RustAdapter {
 
     fn extract_references(&self, ast: &FileAst) -> Vec<RefDecl> {
         let prefix = module_prefix(&ast.path);
+        let crate_root = crate_root(&ast.path);
         let source = ast.source.as_bytes();
-        let scope = build_scope(ast.tree.root_node(), source, &prefix);
+        let scope = build_scope(ast.tree.root_node(), source, &prefix, &crate_root);
         let field_types = collect_field_types(ast.tree.root_node(), source);
         let binding_types = collect_binding_types(ast.tree.root_node(), source);
         let mut out = Vec::new();
@@ -76,6 +86,7 @@ impl LanguageAdapter for RustAdapter {
             None,
             &FileContext {
                 scope,
+                crate_root,
                 field_types,
                 binding_types,
             },
@@ -113,6 +124,97 @@ fn module_prefix(rel_path: &str) -> String {
         segments.pop();
     }
     segments.join("::")
+}
+
+/// The package a `Cargo.toml` declares, or `None` for a virtual workspace manifest (no
+/// `[package]`) or one that doesn't parse. `[dependencies]`, `[build-dependencies]` and
+/// `[dev-dependencies]` all count, including their `[target.'cfg(..)'.*]` forms.
+fn parse_cargo_manifest(rel_path: &str, source: &str) -> Option<PackageDecl> {
+    let manifest: toml::Table = source.parse().ok()?;
+    let name = manifest.get("package")?.get("name")?.as_str()?.to_string();
+    let root = rel_path
+        .rsplit_once('/')
+        .map(|(dir, _)| dir.to_string())
+        .unwrap_or_default();
+
+    let lib = manifest.get("lib");
+    let import_name = lib
+        .and_then(|l| l.get("name"))
+        .and_then(toml::Value::as_str)
+        .unwrap_or(&name)
+        .replace('-', "_");
+    let lib_path = lib
+        .and_then(|l| l.get("path"))
+        .and_then(toml::Value::as_str)
+        .unwrap_or("src/lib.rs");
+    let module_root = module_prefix(&join_dir(&root, lib_path));
+
+    let source_root = join_dir(&root, "src");
+    let mut dependencies = Vec::new();
+    collect_dependencies(&manifest, &mut dependencies);
+    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+        for target in targets.values().filter_map(toml::Value::as_table) {
+            collect_dependencies(target, &mut dependencies);
+        }
+    }
+
+    Some(PackageDecl {
+        root,
+        name,
+        import_name,
+        module_root,
+        source_root,
+        dependencies,
+    })
+}
+
+/// A dependency's key is what code calls it (with `-` spelled `_`), unless the entry
+/// renames it with `package = "..."`, in which case the key is only the local name.
+fn collect_dependencies(table: &toml::Table, out: &mut Vec<PackageDependency>) {
+    for (section, dev_only) in [
+        ("dependencies", false),
+        ("build-dependencies", false),
+        ("dev-dependencies", true),
+    ] {
+        let Some(entries) = table.get(section).and_then(toml::Value::as_table) else {
+            continue;
+        };
+        for (key, entry) in entries {
+            let package = entry
+                .get("package")
+                .and_then(toml::Value::as_str)
+                .unwrap_or(key);
+            out.push(PackageDependency {
+                package: package.to_string(),
+                import_name: key.replace('-', "_"),
+                dev_only,
+            });
+        }
+    }
+}
+
+fn join_dir(dir: &str, path: &str) -> String {
+    let path = path.trim_start_matches("./");
+    if dir.is_empty() {
+        path.to_string()
+    } else {
+        format!("{dir}/{path}")
+    }
+}
+
+/// The module path `crate::` means in a file: the crate root its `src/` directory is
+/// indexed under (`apps::gateway::src` for `apps/gateway/src/bridge.rs`, `` for a
+/// top-level `src/`), or, for a file outside any `src/` (an integration test, an
+/// example), the file itself — each of those is a crate root of its own.
+fn crate_root(rel_path: &str) -> String {
+    let path = rel_path.replace('\\', "/");
+    if path.starts_with("src/") {
+        return String::new();
+    }
+    match path.rfind("/src/") {
+        Some(end) => path[..end + "/src".len()].replace('/', "::"),
+        None => module_prefix(&path),
+    }
 }
 
 fn join_path(prefix: &str, name: &str) -> String {
@@ -354,6 +456,8 @@ fn last_identifier_text<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
 /// field, which is what makes `self.service.charge()` resolvable rather than a guess.
 struct FileContext {
     scope: FileScope,
+    /// What `crate::` means in this file — see `crate_root`.
+    crate_root: String,
     field_types: HashMap<String, String>,
     binding_types: HashMap<String, String>,
 }
@@ -363,14 +467,15 @@ struct FileContext {
 /// A name with neither a `use` nor a declaration here is `Opaque`: in Rust it's a macro,
 /// a prelude item, or something in another module that this file never named, and none of
 /// those are evidence that a same-named symbol elsewhere in the project is the target.
-fn build_scope(root: Node, source: &[u8], prefix: &str) -> FileScope {
+fn build_scope(root: Node, source: &[u8], prefix: &str, crate_root: &str) -> FileScope {
     let mut scope = FileScope::new(prefix, RefTarget::Opaque);
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
         match child.kind() {
             "use_declaration" => {
                 if let Some(argument) = child.child_by_field_name("argument") {
-                    collect_use(argument, source, prefix, &[], &mut scope);
+                    let module = UseModule { prefix, crate_root };
+                    collect_use(argument, source, &module, &[], &mut scope);
                 }
             }
             "function_item" | "struct_item" | "enum_item" | "trait_item" | "type_item"
@@ -388,10 +493,17 @@ fn build_scope(root: Node, source: &[u8], prefix: &str) -> FileScope {
 /// Walks one `use` tree, accumulating the module path in `path` and recording each leaf
 /// (a plain name, an `as` alias, or a `*`) against the module it came from.
 ///
-/// `crate::` and `self::` are dropped: this adapter's module paths are already
-/// crate-relative (see `module_prefix`). `super::` climbs one segment out of the current
-/// module, which is as far as a purely structural reading can honestly go.
-fn collect_use(node: Node, source: &[u8], prefix: &str, path: &[String], scope: &mut FileScope) {
+/// `crate::` becomes the file's crate root and `self::` its own module, so neither can be
+/// mistaken for a dependency of the same name (see `PackageDecl`). `super::` climbs one
+/// segment out of the current module, which is as far as a purely structural reading can
+/// honestly go.
+fn collect_use(
+    node: Node,
+    source: &[u8],
+    module: &UseModule,
+    path: &[String],
+    scope: &mut FileScope,
+) {
     match node.kind() {
         "scoped_identifier" | "scoped_use_list" | "use_wildcard" => {
             let (qualifier_path, leaf) = match node.kind() {
@@ -403,13 +515,13 @@ fn collect_use(node: Node, source: &[u8], prefix: &str, path: &[String], scope: 
             };
             let mut path = path.to_vec();
             if let Some(qualifier) = qualifier_path {
-                extend_use_path(qualifier, source, prefix, &mut path);
+                extend_use_path(qualifier, source, module, &mut path);
             }
             match node.kind() {
                 "use_wildcard" => scope.add_wildcard(path.join("::")),
                 "scoped_use_list" => {
                     if let Some(list) = node.child_by_field_name("list") {
-                        collect_use(list, source, prefix, &path, scope);
+                        collect_use(list, source, module, &path, scope);
                     }
                 }
                 _ => {
@@ -423,7 +535,7 @@ fn collect_use(node: Node, source: &[u8], prefix: &str, path: &[String], scope: 
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if !matches!(child.kind(), "," | "{" | "}") {
-                    collect_use(child, source, prefix, path, scope);
+                    collect_use(child, source, module, path, scope);
                 }
             }
         }
@@ -433,7 +545,7 @@ fn collect_use(node: Node, source: &[u8], prefix: &str, path: &[String], scope: 
             if let Some(original) = node.child_by_field_name("path") {
                 if original.kind() == "scoped_identifier" {
                     if let Some(qualifier) = original.child_by_field_name("path") {
-                        extend_use_path(qualifier, source, prefix, &mut path);
+                        extend_use_path(qualifier, source, module, &mut path);
                     }
                 }
             }
@@ -450,24 +562,53 @@ fn collect_use(node: Node, source: &[u8], prefix: &str, path: &[String], scope: 
     }
 }
 
-/// Appends a `use` path's segments to `path`, normalizing the crate-relative prefixes
-/// this adapter's `module_prefix` doesn't use.
-fn extend_use_path(node: Node, source: &[u8], prefix: &str, path: &mut Vec<String>) {
+/// The two module paths a `use` tree's leading keyword can stand for.
+struct UseModule<'a> {
+    /// This file's own module (`self::`, and the parent of `super::`).
+    prefix: &'a str,
+    /// This file's crate root (`crate::`).
+    crate_root: &'a str,
+}
+
+fn push_segments(path: &mut Vec<String>, module: &str) {
+    path.extend(
+        module
+            .split("::")
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+    );
+}
+
+/// Appends a `use` path's segments to `path`, replacing a leading `crate`, `self` or
+/// `super` with the module it stands for.
+fn extend_use_path(node: Node, source: &[u8], module: &UseModule, path: &mut Vec<String>) {
     match node.kind() {
         "scoped_identifier" => {
             if let Some(inner) = node.child_by_field_name("path") {
-                extend_use_path(inner, source, prefix, path);
+                extend_use_path(inner, source, module, path);
             }
             if let Some(name) = node.child_by_field_name("name") {
-                extend_use_path(name, source, prefix, path);
+                extend_use_path(name, source, module, path);
             }
         }
-        "crate" | "self" => {}
+        "crate" => {
+            if path.is_empty() {
+                push_segments(path, module.crate_root);
+            }
+        }
+        "self" => {
+            if path.is_empty() {
+                push_segments(path, module.prefix);
+            }
+        }
         "super" => {
             // One module out from this file's own module.
             if path.is_empty() {
-                let mut segments: Vec<&str> =
-                    prefix.split("::").filter(|s| !s.is_empty()).collect();
+                let mut segments: Vec<&str> = module
+                    .prefix
+                    .split("::")
+                    .filter(|s| !s.is_empty())
+                    .collect();
                 segments.pop();
                 path.extend(segments.into_iter().map(str::to_string));
             }
@@ -729,7 +870,7 @@ fn qualifier_target(segments: &[String], ctx: &FileContext) -> RefTarget {
     };
     let rest = || segments[1..].join("::");
     match first.as_str() {
-        "crate" => RefTarget::Module(rest()),
+        "crate" => RefTarget::Module(prepend_module(&ctx.crate_root, &rest())),
         "self" => RefTarget::Module(prepend_module(ctx.scope.module(), &rest())),
         "super" => {
             let mut parent: Vec<&str> = ctx
@@ -816,6 +957,11 @@ fn collect_refs(
             "function_item" => {
                 if let Some(name) = field_text(child, "name", source) {
                     let qualified = join_path(prefix, name);
+                    for signature in ["parameters", "return_type"] {
+                        if let Some(types) = child.child_by_field_name(signature) {
+                            emit_type_refs(types, source, &qualified, ctx, out);
+                        }
+                    }
                     if let Some(body) = child.child_by_field_name("body") {
                         collect_refs(body, source, prefix, Some(&qualified), ctx, out);
                     }
@@ -906,15 +1052,19 @@ fn collect_refs(
                 };
                 let name = child.child_by_field_name(name_field);
                 if let (Some(from), Some(name)) = (current_fn, name) {
-                    if name.kind() == "scoped_type_identifier" {
-                        emit_path_ref(name, source, from, ctx, out);
-                    }
+                    emit_type_refs(name, source, from, ctx, out);
                 }
                 let mut fields = child.walk();
                 for field in child.children(&mut fields) {
                     if Some(field) != name {
                         collect_refs(field, source, prefix, current_fn, ctx, out);
                     }
+                }
+            }
+            // A type named inside a body: a `let` annotation, a generic argument, a cast.
+            "type_identifier" | "scoped_type_identifier" => {
+                if let Some(from) = current_fn {
+                    emit_type_refs(child, source, from, ctx, out);
                 }
             }
             "match_pattern" => {
@@ -982,6 +1132,45 @@ fn emit_path_ref(path: Node, source: &[u8], from: &str, ctx: &FileContext, out: 
         kind: EdgeKind::References,
         to_target: qualifier_target(&segments, ctx),
     });
+}
+
+/// Records every type a signature or type expression names as a `References` edge from
+/// `from` — so a function that only takes an imported struct as a parameter still depends
+/// on the file declaring it. Only a name an import or a same-file declaration stands
+/// behind counts: `String`, `Vec` or a generic parameter `T` resolves nowhere in this
+/// file, and matching those by name alone would tie every signature to any project type
+/// that happens to share the name.
+fn emit_type_refs(
+    node: Node,
+    source: &[u8],
+    from: &str,
+    ctx: &FileContext,
+    out: &mut Vec<RefDecl>,
+) {
+    match node.kind() {
+        "type_identifier" => {
+            let Ok(name) = node.utf8_text(source) else {
+                return;
+            };
+            if let target @ (RefTarget::Module(_) | RefTarget::ModuleDefault(_)) =
+                ctx.scope.bare(name)
+            {
+                out.push(RefDecl {
+                    from_qualified_path: from.to_string(),
+                    to_name: name.to_string(),
+                    kind: EdgeKind::References,
+                    to_target: target,
+                });
+            }
+        }
+        "scoped_type_identifier" => emit_path_ref(node, source, from, ctx, out),
+        _ => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                emit_type_refs(child, source, from, ctx, out);
+            }
+        }
+    }
 }
 
 /// Whether a call's callee is a plain path (`Type::method`, `module::func::<T>`), which

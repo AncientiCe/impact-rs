@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::adapter::{ContractRef, ContractRole, RefDecl, RefTarget};
+use crate::adapter::{ContractRef, ContractRole, PackageDecl, RefDecl, RefTarget};
 use crate::graph::{Confidence, Edge, EdgeKind, Node, NodeId, NodeKind, SymbolGraph};
 
 /// Resolves a name (however precisely an adapter or a user could state it) against a
@@ -264,6 +264,125 @@ fn contains_run(haystack: &[&str], needle: &[&str]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
+/// Which package (see `PackageDecl`) each file belongs to, and what each package may
+/// reach — the part of resolution no single file's imports can answer.
+struct Packages<'p> {
+    packages: Vec<(&'p str, &'p PackageDecl)>,
+    /// For each package, the indices of the packages its shipped code can reach: itself
+    /// and everything it depends on, directly or not. Transitive, because a value of a
+    /// type from a dependency's dependency can still have its methods called.
+    visible: Vec<HashSet<usize>>,
+    /// The same, plus its dev-only dependencies (and theirs) — what its test code reaches.
+    visible_to_tests: Vec<HashSet<usize>>,
+}
+
+impl<'p> Packages<'p> {
+    fn new(packages: &'p [(String, PackageDecl)]) -> Self {
+        let packages: Vec<(&str, &PackageDecl)> =
+            packages.iter().map(|(l, p)| (l.as_str(), p)).collect();
+        let find = |language: &str, name: &str| {
+            packages
+                .iter()
+                .position(|(l, p)| *l == language && p.name == name)
+        };
+        let direct: Vec<Vec<(usize, bool)>> = packages
+            .iter()
+            .map(|(language, package)| {
+                package
+                    .dependencies
+                    .iter()
+                    .filter_map(|d| find(language, &d.package).map(|i| (i, d.dev_only)))
+                    .collect()
+            })
+            .collect();
+        // Everything reachable from `start` through non-dev dependencies — a dependency's
+        // own dev-dependencies are never part of what depends on it.
+        let closure = |start: &[usize]| {
+            let mut seen: HashSet<usize> = HashSet::new();
+            let mut stack = start.to_vec();
+            while let Some(i) = stack.pop() {
+                if seen.insert(i) {
+                    stack.extend(direct[i].iter().filter(|(_, dev)| !dev).map(|(d, _)| *d));
+                }
+            }
+            seen
+        };
+        let visible: Vec<HashSet<usize>> = (0..packages.len()).map(|i| closure(&[i])).collect();
+        let visible_to_tests = (0..packages.len())
+            .map(|i| {
+                let mut start = vec![i];
+                start.extend(direct[i].iter().filter(|(_, dev)| *dev).map(|(d, _)| *d));
+                closure(&start)
+            })
+            .collect();
+        Self {
+            packages,
+            visible,
+            visible_to_tests,
+        }
+    }
+
+    /// The package `file` belongs to: the one with the deepest root containing it, so a
+    /// crate nested inside another crate's directory owns its own files.
+    fn owner(&self, language: &str, file: &str) -> Option<usize> {
+        self.packages
+            .iter()
+            .enumerate()
+            .filter(|(_, (l, p))| *l == language && is_under(file, &p.root))
+            .max_by_key(|(_, (_, p))| p.root.len())
+            .map(|(i, _)| i)
+    }
+
+    /// `r` with an import of a package rewritten to where that package's symbols are
+    /// indexed, when `r` names one this package can see by its import name — or `r`
+    /// unchanged. `use wire_protocol::codec::X` gives `Module("wire_protocol::codec")`,
+    /// which says nothing about the `crates::wire-protocol::src::codec` its symbols
+    /// actually live under; the manifest does.
+    fn rewrite(&self, package: usize, r: &RefDecl) -> Option<RefDecl> {
+        let module = match &r.to_target {
+            RefTarget::Module(m) | RefTarget::ModuleDefault(m) => m,
+            RefTarget::Opaque | RefTarget::Unscoped => return None,
+        };
+        let (first, rest) = match module.split_once("::") {
+            Some((first, rest)) => (first, Some(rest)),
+            None => (module.as_str(), None),
+        };
+        let (language, own) = self.packages[package];
+        let target = if own.import_name == first {
+            own
+        } else {
+            let dependency = own.dependencies.iter().find(|d| d.import_name == first)?;
+            self.packages
+                .iter()
+                .find(|(l, p)| *l == language && p.name == dependency.package)
+                .map(|(_, p)| *p)?
+        };
+        let rewritten = match rest {
+            Some(rest) if !target.module_root.is_empty() => {
+                format!("{}::{rest}", target.module_root)
+            }
+            Some(rest) => rest.to_string(),
+            None => target.module_root.clone(),
+        };
+        let to_target = match r.to_target {
+            RefTarget::ModuleDefault(_) => RefTarget::ModuleDefault(rewritten),
+            _ => RefTarget::Module(rewritten),
+        };
+        Some(RefDecl {
+            to_target,
+            ..r.clone()
+        })
+    }
+}
+
+/// Whether `file` sits under the directory `root` (`""` being the project root).
+fn is_under(file: &str, root: &str) -> bool {
+    root.is_empty()
+        || file
+            .strip_prefix(root)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
 /// Resolves adapter-emitted `RefDecl`s and `ContractRef`s into graph `Edge`s. This is
 /// structural (name + qualified-path matching), not semantic — it doesn't know about
 /// types, traits, or scope, so a name that could plausibly resolve to several candidates
@@ -277,13 +396,27 @@ fn contains_run(haystack: &[&str], needle: &[&str]) -> bool {
 /// resolver (built lazily, on the first call site from that language), which also keeps
 /// the other languages' same-named symbols from diluting a match's confidence. Contract
 /// nodes stay visible to every language, since a contract is shared by definition.
-pub fn link(graph: &SymbolGraph, refs: &[RefDecl], contract_refs: &[ContractRef]) -> Vec<Edge> {
+///
+/// `packages` (see `PackageDecl`) narrows that further for a call site inside a known
+/// package: it resolves only into its own package and the packages it depends on, and an
+/// import of one of those by its import name is rewritten to where its symbols live. A
+/// symbol outside every package stays visible to everything, as before.
+pub fn link(
+    graph: &SymbolGraph,
+    refs: &[RefDecl],
+    contract_refs: &[ContractRef],
+    packages: &[(String, PackageDecl)],
+) -> Vec<Edge> {
     let resolver = Resolver::build(graph);
-    let languages: HashMap<&NodeId, &str> = graph
+    let packages = Packages::new(packages);
+    let owners: HashMap<&NodeId, (&str, Option<usize>)> = graph
         .nodes()
-        .map(|n| (&n.id, n.language.as_str()))
+        .map(|n| {
+            let language = n.language.as_str();
+            (&n.id, (language, packages.owner(language, &n.file)))
+        })
         .collect();
-    let mut by_language: HashMap<&str, Resolver> = HashMap::new();
+    let mut by_scope: HashMap<(&str, Option<usize>, bool), Resolver> = HashMap::new();
     let mut edges = Vec::new();
 
     for r in refs {
@@ -291,13 +424,45 @@ pub fn link(graph: &SymbolGraph, refs: &[RefDecl], contract_refs: &[ContractRef]
             continue;
         };
         for from_id in &from_ids {
-            let language = languages.get(from_id).copied().unwrap_or_default();
-            let targets = by_language.entry(language).or_insert_with(|| {
-                Resolver::build_where(graph, |n| {
-                    n.language == language || matches!(n.kind, NodeKind::Contract(_))
-                })
+            let (language, package) = owners.get(from_id).copied().unwrap_or_default();
+            let rewritten = package.and_then(|p| packages.rewrite(p, r));
+            let resolved_ref = rewritten.as_ref().unwrap_or(r);
+            // Test code may also reach dev-only dependencies: a test function, a file
+            // outside the package's shipped source (an integration test, a bench), or a
+            // reference an import stands behind — which covers a test-only helper module
+            // inside the shipped source too, since it has to import what it uses.
+            let as_test = package.is_some_and(|p| {
+                graph.node(from_id).is_some_and(|n| {
+                    n.is_test || !is_under(&n.file, &packages.packages[p].1.source_root)
+                }) || matches!(
+                    resolved_ref.to_target,
+                    RefTarget::Module(_) | RefTarget::ModuleDefault(_)
+                )
             });
-            let Some((to_ids, confidence)) = targets.resolve_ref(r) else {
+            let targets = by_scope
+                .entry((language, package, as_test))
+                .or_insert_with(|| {
+                    let visible = package.map(|p| {
+                        if as_test {
+                            &packages.visible_to_tests[p]
+                        } else {
+                            &packages.visible[p]
+                        }
+                    });
+                    Resolver::build_where(graph, |n| {
+                        if matches!(n.kind, NodeKind::Contract(_)) {
+                            return true;
+                        }
+                        if n.language != language {
+                            return false;
+                        }
+                        match (visible, owners.get(&n.id).and_then(|(_, owner)| *owner)) {
+                            (Some(visible), Some(owner)) => visible.contains(&owner),
+                            _ => true,
+                        }
+                    })
+                });
+            let Some((to_ids, confidence)) = targets.resolve_ref(resolved_ref) else {
                 continue;
             };
             for to_id in &to_ids {

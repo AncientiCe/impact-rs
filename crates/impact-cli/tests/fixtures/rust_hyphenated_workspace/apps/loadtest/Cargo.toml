@@ -1,0 +1,9 @@
+[package]
+name = "loadtest"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dev-dependencies]
+pod-gateway = { path = "../pod-gateway" }
+wire-protocol = { path = "../../crates/wire-protocol" }

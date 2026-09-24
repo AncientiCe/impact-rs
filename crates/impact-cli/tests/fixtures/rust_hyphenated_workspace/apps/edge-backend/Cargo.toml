@@ -1,0 +1,12 @@
+[package]
+name = "edge-backend"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "edge_backend"
+path = "src/lib.rs"
+
+[dependencies]
+wire-protocol = { path = "../../crates/wire-protocol" }

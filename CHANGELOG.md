@@ -2,6 +2,33 @@
 
 All notable changes to `impact` are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- `impact-lang-rust`: workspace crates with hyphenated names are found through their
+  underscored import names. A crate named `wire-protocol` is written `wire_protocol` in
+  code, which never matched the `wire-protocol` directory its symbols are indexed under.
+  So `use wire_protocol::X` in another crate produced no edge, and most of a shared
+  protocol crate's consumers were missing from its blast radius. `impact index` now reads
+  every `Cargo.toml`, and an import of a package (or of a dependency renamed with
+  `package = "..."`, or a lib renamed with `[lib] name`) resolves to where that package's
+  symbols live, submodules included (`use wire_protocol::codec::encode`).
+- A reference only resolves into its own package and the packages it depends on
+  (transitively). Before, a method call on a value of unknown type (`queue.push(x)`) could
+  match a same-named method in a crate that depends on the caller, which the caller can
+  never reach. That listed a crate's upstream dependencies as its `[probable]` callers.
+  Dev-dependencies are visible only to test code: tests, benches, examples, `#[test]`
+  functions, and references backed by an import.
+- `impact-lang-rust`: a type named in a function signature, or in a type position inside a
+  body (a `let` annotation, a generic argument, a plain struct literal), is now a reference.
+  A file that only takes an imported struct as a parameter used to have no edge to it. Only
+  names backed by an import or a same-file declaration count, so `String` or a generic `T`
+  never matches a project type by name alone.
+- `crate::` in a `use` or a path means the file's own crate root, and `self::` its own
+  module. Before, both were dropped, so `crate::store::X` could match any `store` module
+  in the workspace.
+
 ## [0.11.4] - 2026-09-24
 
 ### Fixed

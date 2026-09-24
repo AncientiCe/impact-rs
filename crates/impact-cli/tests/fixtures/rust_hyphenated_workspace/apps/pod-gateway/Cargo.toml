@@ -1,0 +1,9 @@
+[package]
+name = "pod-gateway"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+wire-protocol = { path = "../../crates/wire-protocol" }
+store = { path = "../../crates/ticket-store", package = "ticket-store" }

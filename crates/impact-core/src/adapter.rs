@@ -124,6 +124,47 @@ pub struct ContractRef {
     pub role: ContractRole,
 }
 
+/// One package (a Cargo crate, so far) whose manifest an adapter read: where it lives,
+/// what its own code calls it, and which other packages it may use.
+///
+/// The linker uses this for two things a single source file can't tell it. It rewrites
+/// an import of a dependency (`use wire_protocol::X`, which only says `wire_protocol`)
+/// to the path that package's symbols are indexed under (`crates::wire-protocol::src`).
+/// And it keeps a reference from resolving into a package its own package doesn't depend
+/// on: code can only call what its package can see, however unique a name is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageDecl {
+    /// The directory holding the manifest, relative to the project root and
+    /// `/`-separated; `""` for a manifest at the root itself. Every file under it (and
+    /// not under a nested package's own root) belongs to this package.
+    pub root: String,
+    /// The package's own name, as other manifests list it in their dependencies.
+    pub name: String,
+    /// The name the package's other targets use for its library (`wire_protocol` for a
+    /// package named `wire-protocol`) — its binary and tests import it like any
+    /// dependency.
+    pub import_name: String,
+    /// The qualified-path prefix the package's library symbols are indexed under — what
+    /// an import of `import_name` means in this project's own symbol paths.
+    pub module_root: String,
+    /// The directory holding the package's shipped code (a crate's `src/`). Files outside
+    /// it — tests, benches, examples — may use its dev-only dependencies.
+    pub source_root: String,
+    pub dependencies: Vec<PackageDependency>,
+}
+
+/// One entry in a package's dependency list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageDependency {
+    /// The depended-on package's name (its `PackageDecl::name`).
+    pub package: String,
+    /// The name the depending package's code uses for it — usually the package name in
+    /// the language's own spelling, but a manifest can rename a dependency.
+    pub import_name: String,
+    /// Whether only the package's test code may use it (a Cargo dev-dependency).
+    pub dev_only: bool,
+}
+
 /// One language's plug-in to the indexer. Implementations own everything specific to
 /// their language (grammar, symbol shapes); the core graph, cache, and query engine
 /// never depend on a specific language.
@@ -132,6 +173,19 @@ pub trait LanguageAdapter: Send + Sync {
 
     /// Glob patterns (relative to a project root) this adapter claims, e.g. `**/*.rs`.
     fn file_globs(&self) -> &[&str];
+
+    /// Glob patterns for package manifests this adapter can read (`**/Cargo.toml`). Each
+    /// match is handed to `parse_manifest` on every index run. Empty by default: a
+    /// language without packages this adapter understands gets no package boundaries.
+    fn manifest_globs(&self) -> &[&str] {
+        &[]
+    }
+
+    /// The package a manifest declares, or `None` for one that declares none (a Cargo
+    /// workspace root with no `[package]`, or a manifest that doesn't parse).
+    fn parse_manifest(&self, _path: &Path, _source: &str) -> Option<PackageDecl> {
+        None
+    }
 
     fn parse_file(&self, path: &Path, source: &str) -> anyhow::Result<FileAst>;
 

@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "crates/wire-protocol",
+    "crates/ticket-store",
+    "apps/edge-backend",
+    "apps/pod-gateway",
+    "apps/loadtest",
+]
+resolver = "2"
