@@ -835,8 +835,13 @@ fn collect_refs(
                     }
                 }
                 // A chained call hides a whole call in its callee rather than its
-                // arguments: `build().charge()` calls `build` too.
-                if let Some(callee) = child.child_by_field_name("function") {
+                // arguments: `build().charge()` calls `build` too. A path callee
+                // (`ClientMessage::Ping(..)`) hides nothing but its own qualifier, which
+                // the call edge above already accounts for.
+                if let Some(callee) = child
+                    .child_by_field_name("function")
+                    .filter(|callee| !is_path_callee(*callee))
+                {
                     collect_refs(callee, source, prefix, current_fn, ctx, out);
                 }
                 if let Some(args) = child.child_by_field_name("arguments") {
@@ -879,6 +884,39 @@ fn collect_refs(
                     }
                 }
             }
+            // An import inside a function body names a path without using it.
+            "use_declaration" => {}
+            // A path used as a value rather than called: a unit variant
+            // (`ClientMessage::Leave`), a variant or associated function handed on as a
+            // value (`.map(ClientMessage::Ping)`), or the pattern of an `if let`/`let`.
+            "scoped_identifier" => {
+                if let Some(from) = current_fn {
+                    emit_path_ref(child, source, from, ctx, out);
+                }
+            }
+            // A struct-variant literal (`ClientMessage::Join { room }`) or pattern outside
+            // a match arm (`if let ClientMessage::Join { room } = msg`). The name is a
+            // `scoped_type_identifier`, not a call, so nothing else would see it; the
+            // fields can still hold calls, so everything but the name is walked as usual.
+            "struct_expression" | "struct_pattern" => {
+                let name_field = if child.kind() == "struct_expression" {
+                    "name"
+                } else {
+                    "type"
+                };
+                let name = child.child_by_field_name(name_field);
+                if let (Some(from), Some(name)) = (current_fn, name) {
+                    if name.kind() == "scoped_type_identifier" {
+                        emit_path_ref(name, source, from, ctx, out);
+                    }
+                }
+                let mut fields = child.walk();
+                for field in child.children(&mut fields) {
+                    if Some(field) != name {
+                        collect_refs(field, source, prefix, current_fn, ctx, out);
+                    }
+                }
+            }
             "match_pattern" => {
                 // `Enum::Variant` (and `Enum::Variant(..)`) inside a match arm's pattern
                 // parses as a `scoped_identifier` — its whole text is exactly the
@@ -902,7 +940,9 @@ fn collect_refs(
 /// descending once it matches one, since a `scoped_identifier`'s own children (the two
 /// `identifier`s either side of `::`) aren't further patterns to find.
 fn emit_variant_refs(node: Node, source: &[u8], from: &str, out: &mut Vec<RefDecl>) {
-    if node.kind() == "scoped_identifier" {
+    // A struct-variant pattern (`ClientMessage::Join { room }`) names its variant with a
+    // `scoped_type_identifier` instead — the same `Enum::Variant` text either way.
+    if matches!(node.kind(), "scoped_identifier" | "scoped_type_identifier") {
         if let Ok(text) = node.utf8_text(source) {
             out.push(RefDecl {
                 from_qualified_path: from.to_string(),
@@ -918,6 +958,41 @@ fn emit_variant_refs(node: Node, source: &[u8], from: &str, out: &mut Vec<RefDec
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         emit_variant_refs(child, source, from, out);
+    }
+}
+
+/// Records a path that names something without calling it (`ClientMessage::Leave`,
+/// `ClientMessage::Join { .. }`) as a `References` edge from the enclosing function,
+/// resolved through the file's imports exactly like a call to the same path would be —
+/// so `use proto::ClientMessage` ties it to that crate's enum, and a path that resolves
+/// outside the project (`u32::MAX`, `std::f64::consts::PI`) drops out in the linker.
+fn emit_path_ref(path: Node, source: &[u8], from: &str, ctx: &FileContext, out: &mut Vec<RefDecl>) {
+    let (Some(qualifier), Some(name)) = (
+        path.child_by_field_name("path"),
+        path.child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok()),
+    ) else {
+        return;
+    };
+    let mut segments = Vec::new();
+    path_segments(qualifier, source, &mut segments);
+    out.push(RefDecl {
+        from_qualified_path: from.to_string(),
+        to_name: name.to_string(),
+        kind: EdgeKind::References,
+        to_target: qualifier_target(&segments, ctx),
+    });
+}
+
+/// Whether a call's callee is a plain path (`Type::method`, `module::func::<T>`), which
+/// holds no nested call for `collect_refs` to find.
+fn is_path_callee(callee: Node) -> bool {
+    match callee.kind() {
+        "scoped_identifier" => true,
+        "generic_function" => callee
+            .child_by_field_name("function")
+            .is_some_and(|inner| inner.kind() == "scoped_identifier"),
+        _ => false,
     }
 }
 

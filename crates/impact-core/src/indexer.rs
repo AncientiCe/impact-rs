@@ -142,7 +142,17 @@ impl<'a> Indexer<'a> {
         // or skipped as unchanged — the set `prune_missing` diffs the cache against.
         let mut seen: HashSet<String> = HashSet::new();
 
-        for entry in WalkBuilder::new(project_root).build() {
+        // `node_modules/` is third-party code even when nothing ignores it (an untracked
+        // install, or a project that isn't a git repository at all). Indexing it buries
+        // the project's own symbols under minified bundles whose names collide with
+        // everything, so the walker never descends into it.
+        let walker = WalkBuilder::new(project_root)
+            .filter_entry(|entry| {
+                !(entry.file_type().is_some_and(|t| t.is_dir())
+                    && entry.file_name() == "node_modules")
+            })
+            .build();
+        for entry in walker {
             let entry = entry?;
             if !entry.file_type().is_some_and(|t| t.is_file()) {
                 continue;

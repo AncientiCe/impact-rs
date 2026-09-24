@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::adapter::{ContractRef, ContractRole, RefDecl, RefTarget};
-use crate::graph::{Confidence, Edge, EdgeKind, NodeId, NodeKind, SymbolGraph};
+use crate::graph::{Confidence, Edge, EdgeKind, Node, NodeId, NodeKind, SymbolGraph};
 
 /// Resolves a name (however precisely an adapter or a user could state it) against a
 /// graph's `Function`, `Field` (used for enum variants — see `impact-lang-rust`), and
@@ -48,13 +48,19 @@ pub struct Resolver<'g> {
 
 impl<'g> Resolver<'g> {
     pub fn build(graph: &'g SymbolGraph) -> Self {
+        Self::build_where(graph, |_| true)
+    }
+
+    /// A resolver over only the nodes `keep` admits — see `link`, which uses this to keep
+    /// a call site from resolving into a different language than the one it was written in.
+    fn build_where(graph: &'g SymbolGraph, keep: impl Fn(&Node) -> bool) -> Self {
         let mut by_qualified_path = HashMap::new();
         let mut by_last_two_segments: HashMap<String, Vec<NodeId>> = HashMap::new();
         let mut by_short_name: HashMap<&str, Vec<(&str, NodeId)>> = HashMap::new();
         let mut generated = std::collections::HashSet::new();
         let mut default_exports = Vec::new();
 
-        for node in graph.nodes() {
+        for node in graph.nodes().filter(|n| keep(n)) {
             if node.is_generated {
                 generated.insert(node.id.clone());
             }
@@ -264,18 +270,36 @@ fn contains_run(haystack: &[&str], needle: &[&str]) -> bool {
 /// resolves to *all* of them, tagged `Confidence::Heuristic`. A blast-radius tool should
 /// over-report rather than silently miss a caller: false positives are visible and
 /// filterable, false negatives are not.
+///
+/// A call site only ever resolves into its own language: no adapter parses a
+/// cross-language call, so a bare `Leave()` in a JavaScript file that matches a Rust enum
+/// variant by name is always a coincidence, never a caller. Each language gets its own
+/// resolver (built lazily, on the first call site from that language), which also keeps
+/// the other languages' same-named symbols from diluting a match's confidence. Contract
+/// nodes stay visible to every language, since a contract is shared by definition.
 pub fn link(graph: &SymbolGraph, refs: &[RefDecl], contract_refs: &[ContractRef]) -> Vec<Edge> {
     let resolver = Resolver::build(graph);
+    let languages: HashMap<&NodeId, &str> = graph
+        .nodes()
+        .map(|n| (&n.id, n.language.as_str()))
+        .collect();
+    let mut by_language: HashMap<&str, Resolver> = HashMap::new();
     let mut edges = Vec::new();
 
     for r in refs {
         let Some((from_ids, _)) = resolver.resolve(&r.from_qualified_path) else {
             continue;
         };
-        let Some((to_ids, confidence)) = resolver.resolve_ref(r) else {
-            continue;
-        };
         for from_id in &from_ids {
+            let language = languages.get(from_id).copied().unwrap_or_default();
+            let targets = by_language.entry(language).or_insert_with(|| {
+                Resolver::build_where(graph, |n| {
+                    n.language == language || matches!(n.kind, NodeKind::Contract(_))
+                })
+            });
+            let Some((to_ids, confidence)) = targets.resolve_ref(r) else {
+                continue;
+            };
             for to_id in &to_ids {
                 edges.push(Edge {
                     from: from_id.clone(),

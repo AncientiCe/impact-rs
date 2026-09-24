@@ -140,7 +140,7 @@ impl DetectorConfig {
 /// though some adapter's globs would otherwise claim them — vendored or generated code
 /// that isn't already excluded by `.gitignore` (which the indexer's file walker already
 /// respects on its own). Empty by default: nothing is excluded beyond what `.gitignore`
-/// already covers.
+/// already covers, plus `node_modules/`, which the walker always skips.
 #[derive(Debug, Clone, Default)]
 pub struct IndexConfig {
     pub exclude: Vec<String>,

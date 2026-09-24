@@ -2,6 +2,26 @@
 
 All notable changes to `impact` are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- `impact index` no longer descends into `node_modules/`. It used to be indexed whenever
+  nothing ignored it (an untracked install, or a project that isn't a git repository), so
+  minified bundles flooded the graph with colliding short names.
+- A call site only resolves to symbols in its own language. A bare `Leave()` in a
+  JavaScript file used to match a Rust enum variant of the same name and show up as a
+  `[probable]`/`[heuristic]` dependent of the Rust file. Contract nodes are still shared
+  across languages.
+- `impact-lang-rust`: enum variants used without a call are now references. A unit variant
+  used as a value (`ClientMessage::Leave`) now creates an edge. So do a struct-variant
+  literal (`ClientMessage::Join { room }`) and a struct-variant pattern, in a `match` arm
+  or an `if let`/`let`. Before, a `match` whose arms were all struct variants, and every
+  unit- or struct-variant construction, had no edge to the enum. These references resolve
+  through the file's imports, so a consumer in another workspace crate
+  (`use proto::ClientMessage`) is found. Fixes
+  [#7](https://github.com/AncientiCe/impact-rs/issues/7).
+
 ## [0.11.3] - 2026-09-23
 
 ### Fixed
