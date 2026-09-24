@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.11.5] - 2026-09-24
+
 ### Fixed
 
 - `impact-lang-rust`: workspace crates with hyphenated names are found through their
