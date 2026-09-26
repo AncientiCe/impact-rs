@@ -4,6 +4,15 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- `impact report-blindspot` (and the `impact_report_blindspot` MCP tool) stamps the
+  `impact` version into every draft as an `**impact version:**` line. A missed edge may
+  already be fixed in a later release, so a report is only actionable against the version
+  it came from. The version is read from the binary rather than asked of the reporting
+  agent, and it isn't part of the fingerprint, so re-reporting the same gap from a newer
+  release still finds the earlier issue.
+
 ## [0.11.5] - 2026-09-24
 
 ### Fixed

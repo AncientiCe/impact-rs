@@ -67,9 +67,14 @@ pub fn compose_draft(
     let language_line = language
         .map(|l| format!("**Language:** {l}\n"))
         .unwrap_or_default();
+    // Stamped from the binary, not asked of the reporting agent: a gap is only
+    // actionable against the release it was seen in, and it may already be fixed in a
+    // later one. Deliberately left out of the fingerprint, so the same gap re-reported
+    // from a newer version still finds its earlier issue instead of filing a duplicate.
     let body = format!(
-        "**Kind:** {}\n{language_line}\n{}\n\n<!-- impact-blindspot-fp:{fingerprint} -->",
+        "**Kind:** {}\n{language_line}**impact version:** {}\n\n{}\n\n<!-- impact-blindspot-fp:{fingerprint} -->",
         kind.as_str(),
+        env!("CARGO_PKG_VERSION"),
         body.trim(),
     );
 

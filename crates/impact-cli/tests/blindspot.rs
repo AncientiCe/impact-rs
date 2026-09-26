@@ -76,6 +76,27 @@ fn dry_run_prints_a_draft_with_no_network_notice() {
     );
 }
 
+/// Every draft names the `impact` version that produced it. A report is only
+/// actionable against the code it was filed from — a missed edge may already be fixed in
+/// a later release — and the reporting agent can't be relied on to look the version up,
+/// so it's stamped from the binary itself rather than asked for.
+#[test]
+fn draft_body_carries_the_impact_version() {
+    let output = Command::cargo_bin("impact")
+        .unwrap()
+        .args(["report-blindspot", "t", "--body", "b", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    let expected = format!("**impact version:** {}", env!("CARGO_PKG_VERSION"));
+    assert!(
+        value["body"].as_str().unwrap().contains(&expected),
+        "body should carry `{expected}`: {value}"
+    );
+}
+
 /// `--json` gives back a machine-readable draft, always with `submitted: false` — this
 /// subcommand alone never files anything.
 #[test]

@@ -628,6 +628,11 @@ fn report_blindspot_dry_run_returns_a_draft() {
         .unwrap()
         .contains("impact_file reported no callers"));
     assert_eq!(result["fingerprint"].as_str().unwrap().len(), 16);
+    let expected_version = format!("**impact version:** {}", env!("CARGO_PKG_VERSION"));
+    assert!(
+        result["body"].as_str().unwrap().contains(&expected_version),
+        "MCP draft should carry `{expected_version}` too: {result}"
+    );
 }
 
 /// `submit: true` with no existing match files a new issue via the (faked) `gh`.
