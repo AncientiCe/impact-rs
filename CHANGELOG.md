@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.11.6] - 2026-09-26
+
 ### Added
 
 - `impact report-blindspot` (and the `impact_report_blindspot` MCP tool) stamps the
