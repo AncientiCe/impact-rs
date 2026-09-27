@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.11.7] - 2026-09-27
+
 ### Added
 
 - `impact` says when a newer release is out. After `index`, `query`, `change` or `diff`,
