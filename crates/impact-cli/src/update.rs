@@ -193,6 +193,24 @@ pub fn cli_notice() -> Option<String> {
     Some(message(&latest))
 }
 
+/// The notice the MCP server attaches to a tool result, when a newer release is known.
+/// The server shows it once per session. It is addressed to the user, not the agent:
+/// upgrading changes the user's installed toolchain, which is theirs to decide.
+pub fn mcp_notice() -> Option<String> {
+    if disabled() {
+        return None;
+    }
+    let state = refreshed(&state_path()?);
+    let latest = state.latest?;
+    if !is_newer(&latest, CURRENT) {
+        return None;
+    }
+    Some(format!(
+        "{}. This notice is for the user: tell the user, and don't run the upgrade yourself.",
+        message(&latest)
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

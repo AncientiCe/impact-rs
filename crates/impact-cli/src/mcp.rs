@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 use crate::analytics;
 use crate::blindspot::{self, BlindspotKind};
 use crate::ops;
+use crate::update;
 
 /// The MCP client's `clientInfo`, learned from `initialize` and reused to attribute
 /// every subsequent `tools/call` in this stdio session.
@@ -26,11 +27,20 @@ struct ClientIdentity {
     version: Option<String>,
 }
 
+/// Per-session state beyond the client's identity.
+#[derive(Default)]
+struct Session {
+    client: ClientIdentity,
+    /// Set once the release check has run for this session, so a session asks (and
+    /// announces a newer release) at most once.
+    update_checked: bool,
+}
+
 pub fn run() -> Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let analytics_conn = analytics::open().ok();
-    let mut client = ClientIdentity::default();
+    let mut session = Session::default();
 
     for line in stdin.lock().lines() {
         let line = match line {
@@ -57,7 +67,7 @@ pub fn run() -> Result<()> {
             }
         };
 
-        if let Some(response) = handle_request(&request, &mut client, analytics_conn.as_ref()) {
+        if let Some(response) = handle_request(&request, &mut session, analytics_conn.as_ref()) {
             let mut out = stdout.lock();
             writeln!(out, "{response}")?;
             out.flush()?;
@@ -97,9 +107,10 @@ fn initialize_result(protocol_version: &str) -> Value {
 
 fn handle_request(
     req: &Value,
-    client: &mut ClientIdentity,
+    session: &mut Session,
     analytics_conn: Option<&Connection>,
 ) -> Option<String> {
+    let client = &mut session.client;
     let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
     let params = req.get("params").cloned().unwrap_or_default();
     let req_id = req.get("id").cloned().unwrap_or(Value::Null);
@@ -142,9 +153,16 @@ fn handle_request(
                     },
                 );
             }
-            Some(json!({
-                "content": [{"type": "text", "text": serde_json::to_string_pretty(&result).unwrap_or_default()}]
-            }))
+            let mut content = vec![
+                json!({"type": "text", "text": serde_json::to_string_pretty(&result).unwrap_or_default()}),
+            ];
+            if !session.update_checked {
+                session.update_checked = true;
+                if let Some(notice) = update::mcp_notice() {
+                    content.push(json!({"type": "text", "text": notice}));
+                }
+            }
+            Some(json!({ "content": content }))
         }
         _ => {
             return Some(

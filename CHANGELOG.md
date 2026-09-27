@@ -13,6 +13,9 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   timeout, and the notice repeats at most once a day. Offline, nothing is printed and the
   command is unaffected. Nothing is ever downloaded or installed. The check is off when
   `CI` is set, and `IMPACT_NO_UPDATE_CHECK=1` turns it off entirely.
+- The MCP server delivers the same notice to agents, once per session, as an extra
+  content item on the first tool result. It is addressed to the user: it asks the agent
+  to pass it on and not to run the upgrade itself.
 
 ## [0.11.6] - 2026-09-26
 

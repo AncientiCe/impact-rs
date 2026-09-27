@@ -189,3 +189,103 @@ fn an_unreachable_release_server_is_silent() {
     assert!(!stderr.contains("is available"), "got:\n{stderr}");
     assert!(!stderr.contains("update"), "got:\n{stderr}");
 }
+
+/// Runs `impact mcp` with the update check pointed at `url`: `initialize`, then
+/// `impact_index` twice. Returns the text of every content item of each `tools/call`
+/// response, in order.
+fn mcp_two_tool_calls(url: &str, state: &Path, cache_dir: &Path) -> Vec<Vec<String>> {
+    let index_call = |id: i64| {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": {
+                "name": "impact_index",
+                "arguments": {
+                    "project_path": fixture_path().to_str().unwrap(),
+                    "cache_dir": cache_dir.to_str().unwrap(),
+                }
+            }
+        })
+    };
+    let requests = [
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+        index_call(2),
+        index_call(3),
+    ];
+    let input = requests
+        .iter()
+        .map(|r| r.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let output = impact_with_update_check(url, state)
+        .arg("mcp")
+        .write_stdin(input)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .skip(1)
+        .map(|line| {
+            let response: serde_json::Value = serde_json::from_str(line).unwrap();
+            response["result"]["content"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["text"].as_str().unwrap().to_string())
+                .collect()
+        })
+        .collect()
+}
+
+/// Agents are where impact mostly runs, so the notice reaches them too — once per
+/// session, as its own content item, addressed to the user rather than to the agent.
+#[test]
+fn mcp_announces_a_newer_release_once_per_session_for_the_user() {
+    let (url, _) = fake_release_server("v99.0.0");
+    let dir = tempfile::tempdir().unwrap();
+
+    let calls = mcp_two_tool_calls(
+        &url,
+        &dir.path().join("update.json"),
+        &dir.path().join("cache"),
+    );
+
+    assert_eq!(calls.len(), 2);
+    let first_notice = calls[0].iter().find(|text| text.contains("is available"));
+    let Some(notice) = first_notice else {
+        panic!("first tool call carries no notice: {:?}", calls[0]);
+    };
+    assert!(
+        notice.contains(&format!("impact 99.0.0 is available (you have {CURRENT})")),
+        "got: {notice}"
+    );
+    assert!(notice.contains("tell the user"), "got: {notice}");
+    assert!(
+        notice.contains("don't run the upgrade yourself"),
+        "got: {notice}"
+    );
+    serde_json::from_str::<serde_json::Value>(&calls[0][0])
+        .expect("the tool's own result stays the first content item, unchanged");
+    assert!(
+        !calls[1].iter().any(|text| text.contains("is available")),
+        "got: {:?}",
+        calls[1]
+    );
+}
+
+#[test]
+fn mcp_is_silent_about_the_current_release() {
+    let (url, _) = fake_release_server(&format!("v{CURRENT}"));
+    let dir = tempfile::tempdir().unwrap();
+
+    let calls = mcp_two_tool_calls(
+        &url,
+        &dir.path().join("update.json"),
+        &dir.path().join("cache"),
+    );
+
+    assert!(calls.iter().all(|items| items.len() == 1), "got: {calls:?}");
+}

@@ -75,7 +75,7 @@ cargo install --git https://github.com/AncientiCe/impact-rs --locked impact-cli
 
 Prebuilt binaries and the Homebrew tap are populated by [`.github/workflows/release.yml`](.github/workflows/release.yml) on each tagged release (linux x86_64, macOS x86_64/arm64, Windows x86_64); `cargo install --git` always works off the latest source. `impact` is not yet published to crates.io.
 
-**Updates.** `impact` checks once a day whether a newer release is out and, if so, says so on stderr after an analysis command, along with how to upgrade (`brew upgrade impact`, re-running the install script, or the releases page, depending on how it was installed). It never downloads or installs anything itself. The check is a single request to GitHub's releases API with a 2-second timeout; offline, it stays silent. It is off when `CI` is set, and `IMPACT_NO_UPDATE_CHECK=1` turns it off entirely.
+**Updates.** `impact` checks once a day whether a newer release is out and, if so, says so on stderr after an analysis command, along with how to upgrade (`brew upgrade impact`, re-running the install script, or the releases page, depending on how it was installed). Over MCP, the same notice rides along with the first tool result of a session, worded for the agent to pass on to you rather than act on. It never downloads or installs anything itself. The check is a single request to GitHub's releases API with a 2-second timeout; offline, it stays silent. It is off when `CI` is set, and `IMPACT_NO_UPDATE_CHECK=1` turns it off entirely.
 
 ## Quick start
 
