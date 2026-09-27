@@ -306,8 +306,8 @@ enum HookEvent {
 }
 
 /// Times `f`, records a CLI usage event for `command` (client from `IMPACT_CLIENT`,
-/// default `"cli"`), then prints the release notice on stderr if one is due, and returns
-/// `f`'s result unchanged — neither step may change a command's exit code or stdout.
+/// default `"cli"`), and returns `f`'s result unchanged — recording must never change a
+/// command's exit code or output.
 fn with_usage_recorded<T>(
     command: &'static str,
     f: impl FnOnce() -> anyhow::Result<T>,
@@ -323,6 +323,13 @@ fn with_usage_recorded<T>(
         duration_ms: start.elapsed().as_millis() as u64,
         success: result.is_ok(),
     });
+    result
+}
+
+/// Prints the release notice on stderr after an analysis command, if one is due, and
+/// returns the command's result unchanged. Not used for `report-blindspot`, which
+/// promises no network call without `--submit`.
+fn with_update_notice<T>(result: anyhow::Result<T>) -> anyhow::Result<T> {
     if let Some(notice) = update::cli_notice() {
         eprintln!("{notice}");
     }
@@ -337,9 +344,9 @@ fn main() -> anyhow::Result<()> {
             json,
             cache_dir,
             force,
-        } => with_usage_recorded("index", || {
+        } => with_update_notice(with_usage_recorded("index", || {
             run_index(&path, cache_dir.as_deref(), force, json)
-        }),
+        })),
         Command::Query {
             path,
             project,
@@ -349,7 +356,7 @@ fn main() -> anyhow::Result<()> {
             explain,
             summary,
             json,
-        } => with_usage_recorded("file", || {
+        } => with_update_notice(with_usage_recorded("file", || {
             run_query(
                 &path,
                 project.as_deref(),
@@ -360,7 +367,7 @@ fn main() -> anyhow::Result<()> {
                 summary,
                 json,
             )
-        }),
+        })),
         Command::Change {
             description,
             project,
@@ -370,7 +377,7 @@ fn main() -> anyhow::Result<()> {
             explain,
             summary,
             json,
-        } => with_usage_recorded("change", || {
+        } => with_update_notice(with_usage_recorded("change", || {
             run_change(
                 &description,
                 project.as_deref(),
@@ -381,7 +388,7 @@ fn main() -> anyhow::Result<()> {
                 summary,
                 json,
             )
-        }),
+        })),
         Command::Diff {
             file,
             project,
@@ -391,7 +398,7 @@ fn main() -> anyhow::Result<()> {
             explain,
             summary,
             json,
-        } => with_usage_recorded("diff", || {
+        } => with_update_notice(with_usage_recorded("diff", || {
             run_diff(
                 file.as_deref(),
                 project.as_deref(),
@@ -402,7 +409,7 @@ fn main() -> anyhow::Result<()> {
                 summary,
                 json,
             )
-        }),
+        })),
         Command::ReportBlindspot {
             title,
             body,
@@ -765,9 +772,11 @@ fn run_report_blindspot(
     );
 
     if !submit {
+        let newer_release = update::known_newer_release();
         if json {
             let mut value = serde_json::to_value(&draft)?;
             value["submitted"] = serde_json::Value::Bool(false);
+            value["newer_release"] = serde_json::to_value(&newer_release)?;
             println!("{}", serde_json::to_string_pretty(&value)?);
             return Ok(());
         }
@@ -776,6 +785,10 @@ fn run_report_blindspot(
         println!("title: {}", draft.title);
         println!("---");
         println!("{}", draft.body);
+        if let Some(latest) = newer_release {
+            println!("---");
+            println!("note: {}", update::blindspot_note(&latest));
+        }
         return Ok(());
     }
 

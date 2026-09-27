@@ -6,16 +6,22 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ### Added
 
-- `impact` says when a newer release is out. After `index`, `query`, `change`, `diff` or
-  `report-blindspot`, it prints `impact X is available (you have Y)` on stderr, with the
-  upgrade step for how it was installed: `brew upgrade impact`, re-running the install
-  script, or the releases page. GitHub is asked at most once a day, with a 2-second
+- `impact` says when a newer release is out. After `index`, `query`, `change` or `diff`,
+  it prints `impact X is available (you have Y)` on stderr, with the upgrade step for how
+  it was installed: `brew upgrade impact`, re-running the install script, or the
+  releases page. GitHub is asked at most once a day, with a 2-second
   timeout, and the notice repeats at most once a day. Offline, nothing is printed and the
   command is unaffected. Nothing is ever downloaded or installed. The check is off when
   `CI` is set, and `IMPACT_NO_UPDATE_CHECK=1` turns it off entirely.
 - The MCP server delivers the same notice to agents, once per session, as an extra
   content item on the first tool result. It is addressed to the user: it asks the agent
   to pass it on and not to run the upgrade itself.
+- A blind-spot draft (`impact report-blindspot` without `--submit`, and the
+  `impact_report_blindspot` MCP tool without `submit`) says when a newer release is
+  known, since the gap may already be fixed there. It prints a note after the draft, and
+  the JSON draft gets a `newer_release` field (`null` when none is known). The draft
+  uses only what an earlier command cached, so drafting still makes no network call,
+  and it doesn't run the release check either.
 
 ## [0.11.6] - 2026-09-26
 

@@ -156,7 +156,9 @@ fn handle_request(
             let mut content = vec![
                 json!({"type": "text", "text": serde_json::to_string_pretty(&result).unwrap_or_default()}),
             ];
-            if !session.update_checked {
+            // Drafting a blind-spot report promises no network call, so it neither runs
+            // the check nor uses up the session's one notice.
+            if !session.update_checked && tool_name != "impact_report_blindspot" {
                 session.update_checked = true;
                 if let Some(notice) = update::mcp_notice() {
                     content.push(json!({"type": "text", "text": notice}));
@@ -390,6 +392,8 @@ fn tool_report_blindspot(args: &Value) -> Value {
         return match serde_json::to_value(&draft) {
             Ok(mut value) => {
                 value["submitted"] = Value::Bool(false);
+                value["newer_release"] =
+                    update::known_newer_release().map_or(Value::Null, Value::String);
                 value
             }
             Err(e) => json!({"error": e.to_string()}),

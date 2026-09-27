@@ -289,3 +289,119 @@ fn mcp_is_silent_about_the_current_release() {
 
     assert!(calls.iter().all(|items| items.len() == 1), "got: {calls:?}");
 }
+
+/// Runs `impact index` against the fake server so the state file learns about the
+/// release, the way any earlier real command would have.
+fn learn_latest_release(url: &str, state: &Path, cache_dir: &Path) {
+    run_index(impact_with_update_check(url, state), cache_dir);
+}
+
+fn report_blindspot(url: &str, state: &Path, json: bool) -> String {
+    let mut cmd = impact_with_update_check(url, state);
+    cmd.args([
+        "report-blindspot",
+        "misses an indirect call",
+        "--body",
+        "impact_file reported no callers, but grep found one.",
+    ]);
+    if json {
+        cmd.arg("--json");
+    }
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// A gap seen on an old release may already be fixed, so a draft says when a newer
+/// release is known.
+#[test]
+fn a_blindspot_draft_warns_when_a_newer_release_is_known() {
+    let (url, _) = fake_release_server("v99.0.0");
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("update.json");
+    learn_latest_release(&url, &state, &dir.path().join("cache"));
+
+    let stdout = report_blindspot(&url, &state, false);
+
+    assert!(
+        stdout.contains(&format!("impact 99.0.0 is available (you have {CURRENT})")),
+        "got:\n{stdout}"
+    );
+    assert!(stdout.contains("already fixed"), "got:\n{stdout}");
+}
+
+#[test]
+fn a_blindspot_json_draft_names_the_newer_release() {
+    let (url, _) = fake_release_server("v99.0.0");
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("update.json");
+    learn_latest_release(&url, &state, &dir.path().join("cache"));
+
+    let draft: serde_json::Value =
+        serde_json::from_str(&report_blindspot(&url, &state, true)).unwrap();
+
+    assert_eq!(draft["newer_release"], "99.0.0");
+}
+
+/// Drafting a report never touches the network, so the draft only knows what an earlier
+/// command already cached, and drafting doesn't run the check itself.
+#[test]
+fn drafting_a_blindspot_never_asks_for_the_latest_release() {
+    let (url, hits) = fake_release_server("v99.0.0");
+    let dir = tempfile::tempdir().unwrap();
+
+    let stdout = report_blindspot(&url, &dir.path().join("update.json"), false);
+
+    assert!(!stdout.contains("is available"), "got:\n{stdout}");
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+fn mcp_report_blindspot(url: &str, state: &Path) -> serde_json::Value {
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "impact_report_blindspot",
+            "arguments": {
+                "title": "misses an indirect call",
+                "body": "impact_file reported no callers, but grep found one.",
+            }
+        }
+    });
+    let output = impact_with_update_check(url, state)
+        .arg("mcp")
+        .write_stdin(request.to_string())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+#[test]
+fn an_mcp_blindspot_draft_names_the_newer_release() {
+    let (url, hits) = fake_release_server("v99.0.0");
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("update.json");
+    learn_latest_release(&url, &state, &dir.path().join("cache"));
+
+    let response = mcp_report_blindspot(&url, &state);
+
+    let draft: serde_json::Value =
+        serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(draft["newer_release"], "99.0.0");
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+}
+
+/// Over MCP too: a session whose first call drafts a report doesn't run the check.
+#[test]
+fn an_mcp_blindspot_draft_never_asks_for_the_latest_release() {
+    let (url, hits) = fake_release_server("v99.0.0");
+    let dir = tempfile::tempdir().unwrap();
+
+    let response = mcp_report_blindspot(&url, &dir.path().join("update.json"));
+
+    let content = response["result"]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 1, "got: {response}");
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}

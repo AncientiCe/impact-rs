@@ -211,6 +211,24 @@ pub fn mcp_notice() -> Option<String> {
     ))
 }
 
+/// The newest release an earlier check already cached, if it is newer than this binary.
+/// Reads the cache only and never the network, for callers that promise not to make a
+/// request, like drafting a blind-spot report.
+pub fn known_newer_release() -> Option<String> {
+    if disabled() {
+        return None;
+    }
+    let latest = load(&state_path()?).latest?;
+    is_newer(&latest, CURRENT).then_some(latest)
+}
+
+/// What a blind-spot draft says when `known_newer_release` found one.
+pub fn blindspot_note(latest: &str) -> String {
+    format!(
+        "impact {latest} is available (you have {CURRENT}). Check whether this is already fixed in {latest} before filing."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
