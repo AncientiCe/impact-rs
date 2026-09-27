@@ -6,3 +6,7 @@
 # check` and pollute a real user's usage history with test noise. `target/` is
 # gitignored, so this file is local and harmless to commit.
 IMPACT_ANALYTICS_DB = { value = "target/dev-analytics.sqlite", relative = true }
+# Same reasoning for the release check: no existing test knows about it, so `cargo test`
+# would otherwise reach out to GitHub and write the real ~/.impact/update-check.json.
+# Tests that exercise the check remove this variable on their own `impact` invocation.
+IMPACT_NO_UPDATE_CHECK = "1"

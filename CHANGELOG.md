@@ -4,6 +4,16 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- `impact` says when a newer release is out. After `index`, `query`, `change`, `diff` or
+  `report-blindspot`, it prints `impact X is available (you have Y)` on stderr, with the
+  upgrade step for how it was installed: `brew upgrade impact`, re-running the install
+  script, or the releases page. GitHub is asked at most once a day, with a 2-second
+  timeout, and the notice repeats at most once a day. Offline, nothing is printed and the
+  command is unaffected. Nothing is ever downloaded or installed. The check is off when
+  `CI` is set, and `IMPACT_NO_UPDATE_CHECK=1` turns it off entirely.
+
 ## [0.11.6] - 2026-09-26
 
 ### Added

@@ -4,6 +4,7 @@ mod hook;
 mod install;
 mod mcp;
 mod ops;
+mod update;
 
 use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
@@ -305,8 +306,8 @@ enum HookEvent {
 }
 
 /// Times `f`, records a CLI usage event for `command` (client from `IMPACT_CLIENT`,
-/// default `"cli"`), and returns `f`'s result unchanged — recording must never change a
-/// command's exit code or output.
+/// default `"cli"`), then prints the release notice on stderr if one is due, and returns
+/// `f`'s result unchanged — neither step may change a command's exit code or stdout.
 fn with_usage_recorded<T>(
     command: &'static str,
     f: impl FnOnce() -> anyhow::Result<T>,
@@ -322,6 +323,9 @@ fn with_usage_recorded<T>(
         duration_ms: start.elapsed().as_millis() as u64,
         success: result.is_ok(),
     });
+    if let Some(notice) = update::cli_notice() {
+        eprintln!("{notice}");
+    }
     result
 }
 
