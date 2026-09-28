@@ -20,6 +20,12 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   matched every same-named function in the project heuristically, and the inner
   `withTheme(...)` call was never recorded. Now the inner call is the call site, and the
   outer call records nothing.
+- Python: the same two fixes. A bare top-level call is attributed to the module's
+  `<module>` scope. Every module that imports it at the top level (`import a.b`,
+  `from a.b import x`, relative or not) is a dependent, and so is every transitive
+  importer. Imports inside functions or under `if TYPE_CHECKING:` don't count. A test
+  module's scope (`test_*.py`, `*_test.py`) counts as a test. A curried call
+  (`register(name, get_styles)(handler)`) is now a call to `register` only.
 
 ## [0.11.7] - 2026-09-27
 

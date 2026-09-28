@@ -30,7 +30,7 @@ use std::path::Path;
 
 use impact_core::{
     ContractKind, ContractRef, ContractRole, DetectorConfig, EdgeKind, FileAst, FileScope,
-    LanguageAdapter, NodeKind, RefDecl, RefTarget, SymbolDecl,
+    LanguageAdapter, NodeKind, RefDecl, RefTarget, SymbolDecl, MODULE_SCOPE,
 };
 use tree_sitter::Node;
 
@@ -80,7 +80,20 @@ impl LanguageAdapter for PythonAdapter {
 
     fn extract_symbols(&self, ast: &FileAst) -> Vec<SymbolDecl> {
         let prefix = module_prefix(&ast.path);
-        let mut out = Vec::new();
+        // The module's own scope: what top-level calls are attributed to and what an
+        // import of this module points at (see `MODULE_SCOPE`). Every module has one,
+        // since every module runs its own top level on import; it spans only line 1 so it
+        // stays out of the way of `compute_diff_impact` matching a touched line to its
+        // symbol. A pytest test module's is test code — its top level runs on collection.
+        let mut out = vec![SymbolDecl {
+            kind: NodeKind::Module,
+            qualified_path: join_path(&prefix, MODULE_SCOPE),
+            line: 1,
+            end_line: 1,
+            is_test: is_pytest_file(&ast.path),
+            is_generated: false,
+            is_default_export: false,
+        }];
         walk(
             ast.tree.root_node(),
             ast.source.as_bytes(),
@@ -94,7 +107,7 @@ impl LanguageAdapter for PythonAdapter {
         let prefix = module_prefix(&ast.path);
         let source = ast.source.as_bytes();
         let scope = build_scope(ast.tree.root_node(), source, &prefix);
-        let mut out = Vec::new();
+        let mut out = module_imports(ast.tree.root_node(), source, &prefix);
         collect_refs(
             ast.tree.root_node(),
             source,
@@ -168,6 +181,13 @@ fn push(
     });
 }
 
+/// pytest's default test-file pattern (`python_files = test_*.py *_test.py`).
+fn is_pytest_file(rel_path: &str) -> bool {
+    let path = rel_path.replace('\\', "/");
+    let filename = path.rsplit('/').next().unwrap_or(&path);
+    filename.ends_with(".py") && (filename.starts_with("test_") || filename.ends_with("_test.py"))
+}
+
 /// pytest's actual discovery rule, applied identically to free functions and methods:
 /// any name starting with `test` — no decorator or base-class check required. This also
 /// happens to match `unittest.TestCase` methods, which follow the same naming
@@ -239,7 +259,8 @@ fn last_identifier_text<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
 /// Walks the same declaration shapes as `walk`, but descends into function/method bodies
 /// (which `walk` deliberately doesn't) to find `call`s, recording each as a `RefDecl`
 /// from the enclosing function. `current_fn` is `None` outside any function body,
-/// matching every other adapter's `collect_refs`.
+/// matching every other adapter's `collect_refs`; a call there is attributed to the
+/// module's own scope instead (see `collect_call`).
 /// Reads this file's `import` statements and its own top-level definitions into a
 /// `FileScope`.
 ///
@@ -412,28 +433,7 @@ fn collect_refs(
                     }
                 }
             }
-            "call" => {
-                if let (Some(from), Some(func)) =
-                    (current_fn, child.child_by_field_name("function"))
-                {
-                    if let Some(name) = last_identifier_text(func, source) {
-                        out.push(RefDecl {
-                            from_qualified_path: from.to_string(),
-                            to_name: name.to_string(),
-                            kind: EdgeKind::Calls,
-                            to_target: call_target(func, source, scope),
-                        });
-                    }
-                }
-                // A chained call hides a whole call in its callee rather than its
-                // arguments: `build().charge()` calls `build` too.
-                if let Some(callee) = child.child_by_field_name("function") {
-                    collect_refs(callee, source, prefix, current_fn, scope, out);
-                }
-                if let Some(args) = child.child_by_field_name("arguments") {
-                    collect_refs(args, source, prefix, current_fn, scope, out);
-                }
-            }
+            "call" => collect_call(child, source, prefix, current_fn, scope, out),
             "class_definition" => {
                 if let (Some(name), Some(body)) = (
                     field_text(child, "name", source),
@@ -460,6 +460,98 @@ fn collect_refs(
             }
         }
     }
+}
+
+/// One `call`'s references — the call itself and the calls hidden in its callee and
+/// arguments — for `collect_refs`.
+fn collect_call(
+    call: Node,
+    source: &[u8],
+    prefix: &str,
+    current_fn: Option<&str>,
+    scope: &FileScope,
+    out: &mut Vec<RefDecl>,
+) {
+    // Outside every function body the call runs on import: its caller is the module's
+    // own scope. Read from `scope`, not `prefix`, which a class body extends.
+    let module_scope = join_path(scope.module(), MODULE_SCOPE);
+    let from = current_fn.unwrap_or(&module_scope);
+    // A curried call (`register(name, get_styles)(handler)`) calls whatever the inner call
+    // returns, which has no name: the last identifier inside that callee is one of the
+    // inner call's arguments. The inner call is recorded by the recursion below.
+    if let Some(func) = call
+        .child_by_field_name("function")
+        .filter(|func| func.kind() != "call")
+    {
+        if let Some(name) = last_identifier_text(func, source) {
+            out.push(RefDecl {
+                from_qualified_path: from.to_string(),
+                to_name: name.to_string(),
+                kind: EdgeKind::Calls,
+                to_target: call_target(func, source, scope),
+            });
+        }
+    }
+    // A chained call hides a whole call in its callee rather than its arguments:
+    // `build().charge()` calls `build` too. A curried callee is itself a call, and
+    // `collect_refs` only walks a node's children — handed the inner call, it would never
+    // see that call itself.
+    if let Some(callee) = call.child_by_field_name("function") {
+        if callee.kind() == "call" {
+            collect_call(callee, source, prefix, current_fn, scope, out);
+        } else {
+            collect_refs(callee, source, prefix, current_fn, scope, out);
+        }
+    }
+    if let Some(args) = call.child_by_field_name("arguments") {
+        collect_refs(args, source, prefix, current_fn, scope, out);
+    }
+}
+
+/// One `Imports` reference per top-level `import a.b` / `from a.b import x` in this module,
+/// from this module's scope to `a.b`'s — importing a module runs its top level (see
+/// `MODULE_SCOPE`). Only top-level statements: an import inside a function runs when the
+/// function does, and one under `if TYPE_CHECKING:` never runs at all. A module outside
+/// this project has no module scope here to point at, so the linker drops it.
+fn module_imports(root: Node, source: &[u8], prefix: &str) -> Vec<RefDecl> {
+    let from = join_path(prefix, MODULE_SCOPE);
+    let mut modules = Vec::new();
+    let mut cursor = root.walk();
+    for statement in root.children(&mut cursor) {
+        match statement.kind() {
+            "import_from_statement" => {
+                if let Some(module) = statement
+                    .child_by_field_name("module_name")
+                    .and_then(|m| python_module_path(m, source, prefix))
+                {
+                    modules.push(module);
+                }
+            }
+            "import_statement" => {
+                let mut inner = statement.walk();
+                for child in statement.children(&mut inner) {
+                    let name = match child.kind() {
+                        "dotted_name" => Some(child),
+                        "aliased_import" => child.child_by_field_name("name"),
+                        _ => None,
+                    };
+                    if let Some(module) = name.and_then(|n| python_module_path(n, source, prefix)) {
+                        modules.push(module);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    modules
+        .into_iter()
+        .map(|module| RefDecl {
+            from_qualified_path: from.clone(),
+            to_name: MODULE_SCOPE.to_string(),
+            kind: EdgeKind::Imports,
+            to_target: RefTarget::Module(module),
+        })
+        .collect()
 }
 
 fn find_child_of_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
