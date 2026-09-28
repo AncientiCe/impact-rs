@@ -4,6 +4,21 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- Go: an interface's method specs are now indexed, as `<file module>::<Interface>::<Method>`
+  ([#10](https://github.com/AncientiCe/impact-rs/issues/10)). Before, only the interface
+  type was, so querying the file that declares an interface reported no dependents, and
+  `impact change` on one of its methods failed to resolve, even though a signature change
+  there breaks every implementation and every caller. A call through a value whose
+  declared type the file states (`func Load(s store.Store) { s.Fetch() }`, or a struct
+  field) is now a caller of the interface's method at `Exact`, in addition to the methods
+  implementing it in the interface's package. The implementations keep their own
+  confidence: a package-scoped call prefers a concrete method over the interface's spec,
+  as it already preferred a real method over a generated mock. An embedded interface
+  contributes no specs of its own. The cache schema moves to v7, so the first index after
+  upgrading rebuilds from scratch.
+
 ## [0.11.8] - 2026-09-28
 
 ### Fixed

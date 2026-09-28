@@ -38,6 +38,10 @@ pub struct Resolver<'g> {
     /// target or a same-file call precisely naming a generated symbol should still find
     /// it.
     generated: std::collections::HashSet<NodeId>,
+    /// Nodes an adapter marked `is_abstract` (see `SymbolDecl::is_abstract`) — consulted
+    /// only by `in_module`, for the same reason as `generated`: an interface's method
+    /// spec sitting in the same package as the method implementing it.
+    abstract_: std::collections::HashSet<NodeId>,
     /// `(qualified_path, id)` for every node an adapter marked `is_default_export` (see
     /// `SymbolDecl::is_default_export`) — consulted only by `in_module_default`. Kept as
     /// a plain list rather than keyed by name: there's normally exactly one per module,
@@ -65,6 +69,7 @@ impl<'g> Resolver<'g> {
         let mut by_last_two_segments: HashMap<String, Vec<NodeId>> = HashMap::new();
         let mut by_short_name: HashMap<&str, Vec<(&str, NodeId)>> = HashMap::new();
         let mut generated = std::collections::HashSet::new();
+        let mut abstract_ = std::collections::HashSet::new();
         let mut default_exports = Vec::new();
         let mut module_scopes_by_segment: HashMap<&str, Vec<(Vec<&str>, NodeId)>> = HashMap::new();
 
@@ -80,6 +85,9 @@ impl<'g> Resolver<'g> {
             }
             if node.is_generated {
                 generated.insert(node.id.clone());
+            }
+            if node.is_abstract {
+                abstract_.insert(node.id.clone());
             }
             if node.is_default_export {
                 default_exports.push((node.qualified_path.as_str(), node.id.clone()));
@@ -113,6 +121,7 @@ impl<'g> Resolver<'g> {
             by_last_two_segments,
             by_short_name,
             generated,
+            abstract_,
             default_exports,
             module_scopes_by_segment,
         }
@@ -207,11 +216,17 @@ impl<'g> Resolver<'g> {
     /// `example.com/x/internal/svc` gives the package directory segment `svc`, which
     /// appears mid-path in `internal::svc::handler::Handle`. Both are the same question:
     /// is this symbol inside that module?
+    ///
+    /// `name` may be qualified by its enclosing type (`Store::Fetch`), which then has to
+    /// end the symbol's path, with the module anywhere in front of it — a Go package holds
+    /// a file segment between itself and a type (`store::interface::Store::Fetch`), which
+    /// a single contiguous module run can't express.
     fn in_module(&self, module: &str, name: &str) -> Vec<NodeId> {
         if name == MODULE_SCOPE {
             return self.module_scope(module);
         }
-        let Some(candidates) = self.by_short_name.get(name) else {
+        let named: Vec<&str> = name.split("::").collect();
+        let Some(candidates) = named.last().and_then(|short| self.by_short_name.get(short)) else {
             return Vec::new();
         };
         let wanted: Vec<&str> = module.split("::").filter(|s| !s.is_empty()).collect();
@@ -219,11 +234,9 @@ impl<'g> Resolver<'g> {
             .iter()
             .filter(|(path, _)| {
                 let segments: Vec<&str> = path.split("::").collect();
-                // The last segment is `name` itself; the module has to sit in front of it.
-                segments
-                    .len()
-                    .checked_sub(1)
-                    .is_some_and(|end| contains_run(&segments[..end], &wanted))
+                // `name` ends the path; the module has to sit in front of it.
+                segments.ends_with(&named)
+                    && contains_run(&segments[..segments.len() - named.len()], &wanted)
             })
             .map(|(_, id)| id.clone())
             .collect();
@@ -235,23 +248,22 @@ impl<'g> Resolver<'g> {
         // reached through its interface — see `SymbolDecl::is_generated`. Preferring the
         // non-generated subset (when there is one) fixes that without touching a query
         // whose only candidates happen to be generated.
-        // A generated mock living in the same package as the real implementation it
-        // mocks (Go's own `mockgen` convention: `interface_mock.go` beside
-        // `interface.go`) matches this same module+name lookup and, left in, downgrades
-        // the real implementation's own confidence from Exact to Probable on every call
-        // reached through its interface — see `SymbolDecl::is_generated`. Preferring the
-        // non-generated subset (when there is one) fixes that without touching a query
-        // whose only candidates happen to be generated.
-        let non_generated: Vec<NodeId> = matched
-            .iter()
-            .filter(|id| !self.generated.contains(id))
-            .cloned()
-            .collect();
-        if non_generated.is_empty() {
-            matched
-        } else {
-            non_generated
+        // The interface's own method spec (`SymbolDecl::is_abstract`) matches it too, and
+        // is set aside the same way: a call the adapter could tie to the interface
+        // reaches the spec through its own type-scoped reference, so the package-scoped
+        // one only has to find what implements it.
+        let preferred = |skip: &dyn Fn(&NodeId) -> bool| -> Vec<NodeId> {
+            matched.iter().filter(|id| !skip(id)).cloned().collect()
+        };
+        let concrete = preferred(&|id| self.generated.contains(id) || self.abstract_.contains(id));
+        if !concrete.is_empty() {
+            return concrete;
         }
+        let non_generated = preferred(&|id| self.generated.contains(id));
+        if !non_generated.is_empty() {
+            return non_generated;
+        }
+        matched
     }
 
     /// The module scope an import of `module` loads — `in_module`'s answer for the name

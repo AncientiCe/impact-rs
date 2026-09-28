@@ -188,6 +188,7 @@ fn push(out: &mut Vec<SymbolDecl>, kind: NodeKind, qualified_path: String, node:
         is_test: false,
         is_generated: false,
         is_default_export: false,
+        is_abstract: false,
     });
 }
 

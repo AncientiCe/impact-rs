@@ -261,6 +261,7 @@ fn push(
         is_test,
         is_generated: false,
         is_default_export: false,
+        is_abstract: false,
     });
 }
 
@@ -277,6 +278,7 @@ fn push_contract(out: &mut Vec<SymbolDecl>, kind: ContractKind, name: &str, node
         is_test: false,
         is_generated: false,
         is_default_export: false,
+        is_abstract: false,
     });
 }
 

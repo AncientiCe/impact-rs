@@ -60,6 +60,9 @@ pub struct Node {
     /// See `SymbolDecl::is_default_export` — carried through unchanged onto the graph
     /// node so `Resolver::in_module_default` can read it without a second lookup.
     pub is_default_export: bool,
+    /// See `SymbolDecl::is_abstract` — carried through unchanged onto the graph node so
+    /// `Resolver::in_module` can read it without a second lookup.
+    pub is_abstract: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -93,6 +93,7 @@ impl LanguageAdapter for PythonAdapter {
             is_test: is_pytest_file(&ast.path),
             is_generated: false,
             is_default_export: false,
+            is_abstract: false,
         }];
         walk(
             ast.tree.root_node(),
@@ -178,6 +179,7 @@ fn push(
         is_test,
         is_generated: false,
         is_default_export: false,
+        is_abstract: false,
     });
 }
 

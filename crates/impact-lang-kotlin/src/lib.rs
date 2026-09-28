@@ -139,6 +139,7 @@ fn push(
         is_test,
         is_generated: false,
         is_default_export: false,
+        is_abstract: false,
     });
 }
 

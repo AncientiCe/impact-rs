@@ -140,6 +140,7 @@ impl LanguageAdapter for TsAdapter {
             is_test: is_test_file,
             is_generated: false,
             is_default_export: false,
+            is_abstract: false,
         }];
         walk(
             ast.tree.root_node(),
@@ -358,6 +359,7 @@ fn push(
         is_test,
         is_generated: false,
         is_default_export: false,
+        is_abstract: false,
     });
 }
 

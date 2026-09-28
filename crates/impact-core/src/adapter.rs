@@ -56,6 +56,14 @@ pub struct SymbolDecl {
     /// name, so matching by name (`Resolver::in_module`) is structurally the wrong tool
     /// for it.
     pub is_default_export: bool,
+    /// Whether this symbol only declares a signature, with no body of its own — a Go
+    /// interface's method spec, so far (see `impact-lang-go`). Never a guess: an adapter
+    /// that doesn't index such declarations always leaves this `false`. Drives
+    /// `Resolver::in_module` preferring a concrete candidate: a package-scoped call
+    /// matching both an interface's spec and the method that implements it shouldn't
+    /// cost the implementation its own confidence. A call the adapter could tie to the
+    /// interface itself reaches the spec through its own, type-scoped reference.
+    pub is_abstract: bool,
 }
 
 /// How far an adapter could narrow down what a reference's `to_name` actually refers to,

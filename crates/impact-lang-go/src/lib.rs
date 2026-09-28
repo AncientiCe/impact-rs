@@ -169,6 +169,7 @@ fn push(
         is_test,
         is_generated,
         is_default_export: false,
+        is_abstract: false,
     });
 }
 
@@ -284,6 +285,19 @@ fn walk(
                         is_generated_file,
                     );
                 }
+                for (interface, method, spec) in interface_method_specs(child, source) {
+                    push(
+                        out,
+                        NodeKind::Function,
+                        join_path(&join_path(prefix, interface), method),
+                        spec,
+                        false,
+                        is_generated_file,
+                    );
+                    if let Some(symbol) = out.last_mut() {
+                        symbol.is_abstract = true;
+                    }
+                }
             }
             "var_declaration" | "const_declaration" => {
                 for (name, spec) in package_level_bindings(child, source) {
@@ -300,6 +314,47 @@ fn walk(
             _ => {}
         }
     }
+}
+
+/// Every method an interface declared here names — `(interface, method, method_elem)` for
+/// each `method_elem` in each `type_spec` whose type is an `interface_type`, which covers a
+/// grouped `type ( ... )` declaration too. An interface's method spec is where a signature
+/// change starts: it breaks every implementation and every caller at once, so it needs a
+/// symbol of its own to be queried at all. Before this, only the interface's type was
+/// indexed, so a report on the file declaring it came back empty.
+///
+/// An embedded interface (`type_elem`, e.g. `io.Reader` inside `ReadCloser`) contributes no
+/// spec here — its methods are declared, and indexed, where that interface is.
+fn interface_method_specs<'a>(
+    declaration: Node<'a>,
+    source: &'a [u8],
+) -> Vec<(&'a str, &'a str, Node<'a>)> {
+    let mut out = Vec::new();
+    let mut cursor = declaration.walk();
+    for spec in declaration.children(&mut cursor) {
+        if spec.kind() != "type_spec" {
+            continue;
+        }
+        let Some(interface) = field_text(spec, "name", source) else {
+            continue;
+        };
+        let Some(body) = spec
+            .child_by_field_name("type")
+            .filter(|t| t.kind() == "interface_type")
+        else {
+            continue;
+        };
+        let mut body_cursor = body.walk();
+        for element in body.children(&mut body_cursor) {
+            if element.kind() != "method_elem" {
+                continue;
+            }
+            if let Some(method) = field_text(element, "name", source) {
+                out.push((interface, method, element));
+            }
+        }
+    }
+    out
 }
 
 /// Package-level `var`/`const` declarations whose initializer *calls* something. That
@@ -591,6 +646,39 @@ fn resolve_declared_type(declared: &str, ctx: &FileContext) -> RefTarget {
     }
 }
 
+/// The declared type itself, for a method call whose receiver's type this file states
+/// (`s.Fetch()` with `s store.Store`, or `uc.Repo.Fetch()` through a field): the package
+/// `call_target` resolves to, plus the type's own name to qualify the method with
+/// (`Store::Fetch`). `call_target`'s package-scoped reference finds the methods
+/// implementing the call, but a package is too wide to name the interface — its method
+/// spec is set aside there whenever an implementation shares the package (see
+/// `SymbolDecl::is_abstract`). This one names the type, so it reaches the spec when the
+/// type is an interface, and resolves to nothing new when it's a struct whose method the
+/// package-scoped reference already found.
+///
+/// A bare type name is this package's, the same assumption `build_scope` makes for any
+/// unimported name — the interface is usually declared in a sibling file.
+fn declared_type_target(
+    callee: Node,
+    source: &[u8],
+    ctx: &FileContext,
+) -> Option<(RefTarget, String)> {
+    if callee.kind() != "selector_expression" {
+        return None;
+    }
+    let declared = expr_declared_type(callee.child_by_field_name("operand")?, source, ctx)?;
+    match declared.split_once('.') {
+        Some((package, type_name)) => match ctx.scope.qualified(package) {
+            RefTarget::Module(module) => Some((RefTarget::Module(module), type_name.to_string())),
+            _ => None,
+        },
+        None => Some((
+            RefTarget::Module(package_module(ctx.scope.module())),
+            declared,
+        )),
+    }
+}
+
 /// The declared type of an expression node this adapter can type-resolve at all: an
 /// identifier's own declared var/param/receiver type (`ctx.types`), or, recursively, a
 /// field-selector chain's final field type — each hop looks up the previous hop's declared
@@ -658,6 +746,16 @@ fn collect_refs(
                             kind: EdgeKind::Calls,
                             to_target: call_target(func, source, ctx),
                         });
+                        if let Some((to_target, type_name)) =
+                            declared_type_target(func, source, ctx)
+                        {
+                            out.push(RefDecl {
+                                from_qualified_path: from.to_string(),
+                                to_name: join_path(&type_name, name),
+                                kind: EdgeKind::Calls,
+                                to_target,
+                            });
+                        }
                     }
                 }
                 // A chained call hides a whole call in its callee rather than its
