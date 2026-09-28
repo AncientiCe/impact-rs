@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.11.8] - 2026-09-28
+
 ### Fixed
 
 - TypeScript/JavaScript: a call at a module's top level, outside any function body
