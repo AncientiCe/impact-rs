@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.11.9] - 2026-09-28
+
 ### Fixed
 
 - Go: an interface's method specs are now indexed, as `<file module>::<Interface>::<Method>`
