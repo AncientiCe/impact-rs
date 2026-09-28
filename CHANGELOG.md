@@ -4,6 +4,23 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- TypeScript/JavaScript: a call at a module's top level, outside any function body
+  (`init();`, run on every import), is now reported. It used to leave no edge at all
+  ([#9](https://github.com/AncientiCe/impact-rs/issues/9)). The call is attributed to
+  the file's module scope, reported as `<file module>::<module>`. Every file that imports
+  that file, by name or only for its side effects (`import './boot'`), and transitively,
+  is a dependent of it, since loading any of them runs the call. `import type` loads
+  nothing and is skipped. A test file's module scope counts as a test. A file query
+  doesn't seed the file's own module scope, so importing a file that runs nothing on
+  load adds no dependents. `symbols_indexed` doesn't count module scopes.
+- TypeScript/JavaScript: a curried call (`withTheme(name, getStyles)(Button)`) was
+  recorded as a call to the last identifier inside its callee (`getStyles`). That
+  matched every same-named function in the project heuristically, and the inner
+  `withTheme(...)` call was never recorded. Now the inner call is the call site, and the
+  outer call records nothing.
+
 ## [0.11.7] - 2026-09-27
 
 ### Added

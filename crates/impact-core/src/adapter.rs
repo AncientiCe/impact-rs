@@ -14,6 +14,17 @@ pub struct FileAst {
     pub tree: tree_sitter::Tree,
 }
 
+/// The last segment of a file's module-scope symbol: `boot::<module>` is the code in
+/// `boot`'s file that runs when the file is loaded, outside any function body — a bare
+/// `init();` statement, say. An adapter that emits one declares it as a
+/// `NodeKind::Module` symbol, attributes top-level calls to it, and emits an
+/// `EdgeKind::Imports` reference from each importing file's own module scope to it, so
+/// every file whose loading runs that code is reachable as a dependent of it.
+///
+/// Angle brackets because no language this project reads allows them in an identifier:
+/// no call site's name can ever resolve here by accident.
+pub const MODULE_SCOPE: &str = "<module>";
+
 /// A symbol found in one file, before it's turned into a graph `Node`. The indexer
 /// (not the adapter) computes the symbol's stable `NodeId`, so adapters don't need to
 /// know about project identity.

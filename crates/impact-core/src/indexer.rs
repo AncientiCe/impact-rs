@@ -18,6 +18,9 @@ pub struct IndexStats {
     /// `Cache::prune_missing`. Counted separately from `files_indexed`/`files_skipped`,
     /// which only describe files this run actually found.
     pub files_pruned: usize,
+    /// Symbols the indexed files declare. A file's module scope (see `MODULE_SCOPE`) is a
+    /// graph node but not a declaration, so it isn't counted: a file whose declarations
+    /// an adapter failed to recognize still reports `0` here, not `1`.
     pub symbols_indexed: usize,
     /// An event contract that had at least one producer *and* one consumer before this
     /// run and lost one of those sides on this run — see `event_wiring`. Not proof of a
@@ -218,7 +221,10 @@ impl<'a> Indexer<'a> {
                 })
                 .collect();
 
-            stats.symbols_indexed += nodes.len();
+            stats.symbols_indexed += nodes
+                .iter()
+                .filter(|n| !matches!(n.kind, NodeKind::Module))
+                .count();
             cache.replace_file(&rel_str, &content_hash, &nodes, &refs, &contract_refs)?;
             stats.files_indexed += 1;
         }

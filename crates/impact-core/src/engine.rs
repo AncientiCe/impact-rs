@@ -87,9 +87,10 @@ pub fn apply_explain(mut report: ImpactReport, explain: bool) -> ImpactReport {
 /// from the seeds or any of their dependents, and finally which of the dependents found
 /// are test functions (`affected_tests`, plus its own count as `tests`).
 ///
-/// "Reverse dependent" walks backward over `Calls`/`References` edges (who calls this)
-/// *and* `Produces`/`Consumes`/`Reads`/`Writes` edges (who touches this contract) as one
-/// unified graph. That second half matters when a seed is (or belongs to) a file that
+/// "Reverse dependent" walks backward over `Calls`/`References` edges (who calls this),
+/// `Imports` edges (whose loading runs this module scope — see `MODULE_SCOPE`), *and*
+/// `Produces`/`Consumes`/`Reads`/`Writes` edges (who touches this contract) as one
+/// unified graph. That last group matters when a seed is (or belongs to) a file that
 /// declares an event type or is the only place a table name is written, rather than the
 /// one calling into it — without it, querying an event's own definition file would report
 /// nothing, even though every producer and consumer of that event is exactly its blast
@@ -101,6 +102,7 @@ fn compute_impact(graph: &SymbolGraph, seeds: HashSet<NodeId>) -> ImpactReport {
             edge.kind,
             EdgeKind::Calls
                 | EdgeKind::References
+                | EdgeKind::Imports
                 | EdgeKind::Produces
                 | EdgeKind::Consumes
                 | EdgeKind::Reads
@@ -360,10 +362,16 @@ pub fn summarize(report: &ImpactReport, per_file_limit: usize) -> SummaryReport 
 }
 
 /// File-mode query: the blast radius of every symbol declared in `file`.
+///
+/// The file's own module scope (see `MODULE_SCOPE`) isn't seeded: every file that imports
+/// anything has one, and seeding it would report every importer of `file` whether or not
+/// `file` runs anything on load. When it does, the top-level call's target is itself one
+/// of the seeds or reached from one, and the module scope — importers and all — follows
+/// from that edge instead.
 pub fn compute_file_impact(graph: &SymbolGraph, file: &str) -> ImpactReport {
     let seeds: HashSet<NodeId> = graph
         .nodes()
-        .filter(|n| n.file == file)
+        .filter(|n| n.file == file && !matches!(n.kind, NodeKind::Module))
         .map(|n| n.id.clone())
         .collect();
     compute_impact(graph, seeds)

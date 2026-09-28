@@ -12,7 +12,7 @@ pub mod workspace;
 
 pub use adapter::{
     ContractRef, ContractRole, FileAst, LanguageAdapter, PackageDecl, PackageDependency, RefDecl,
-    RefTarget, SymbolDecl,
+    RefTarget, SymbolDecl, MODULE_SCOPE,
 };
 pub use cache::Cache;
 pub use change::{parse_change, ChangeSpec, ParseChangeError};

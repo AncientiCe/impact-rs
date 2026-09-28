@@ -61,7 +61,7 @@ use std::path::Path;
 
 use impact_core::{
     ContractKind, ContractRef, ContractRole, DetectorConfig, EdgeKind, FileAst, FileScope,
-    LanguageAdapter, NodeKind, RefDecl, RefTarget, SymbolDecl,
+    LanguageAdapter, NodeKind, RefDecl, RefTarget, SymbolDecl, MODULE_SCOPE,
 };
 use tree_sitter::Node;
 
@@ -127,7 +127,20 @@ impl LanguageAdapter for TsAdapter {
     fn extract_symbols(&self, ast: &FileAst) -> Vec<SymbolDecl> {
         let prefix = module_prefix(&ast.path);
         let is_test_file = is_test_file(&ast.path);
-        let mut out = Vec::new();
+        // The file's module scope: what top-level calls are attributed to and what an
+        // import of this file points at (see `MODULE_SCOPE`). Every file has one, since
+        // every file runs its own top level on load; it spans only line 1 so it stays out
+        // of the way of `compute_diff_impact` matching a touched line to its symbol. A
+        // test file's is test code — spec files do their setup at the top level.
+        let mut out = vec![SymbolDecl {
+            kind: NodeKind::Module,
+            qualified_path: join_path(&prefix, MODULE_SCOPE),
+            line: 1,
+            end_line: 1,
+            is_test: is_test_file,
+            is_generated: false,
+            is_default_export: false,
+        }];
         walk(
             ast.tree.root_node(),
             ast.source.as_bytes(),
@@ -155,7 +168,13 @@ impl LanguageAdapter for TsAdapter {
             &self.path_aliases,
         );
         let is_test_file = is_test_file(&ast.path);
-        let mut out = Vec::new();
+        let mut out = module_imports(
+            ast.tree.root_node(),
+            source,
+            &ast.path,
+            &prefix,
+            &self.path_aliases,
+        );
         collect_refs(
             ast.tree.root_node(),
             source,
@@ -426,6 +445,48 @@ fn build_scope(
         }
     }
     scope
+}
+
+/// One `Imports` reference per top-level `import ... from './x'`, `import './x'` and
+/// `export ... from './x'` in this file, from this file's module scope to `./x`'s — loading
+/// this file loads `./x`, and runs whatever `./x` does on load (see `MODULE_SCOPE`).
+///
+/// `import type` is skipped: it's erased at compile time, so nothing is loaded. A
+/// specifier that doesn't resolve to this project (a package) has no module scope here
+/// to point at, so it's skipped the same way `collect_import` skips it.
+fn module_imports(
+    root: Node,
+    source: &[u8],
+    file_path: &str,
+    prefix: &str,
+    aliases: &[PathAlias],
+) -> Vec<RefDecl> {
+    let from = join_path(prefix, MODULE_SCOPE);
+    let mut out = Vec::new();
+    let mut cursor = root.walk();
+    for statement in root.children(&mut cursor) {
+        if !matches!(statement.kind(), "import_statement" | "export_statement") {
+            continue;
+        }
+        let mut inner = statement.walk();
+        if statement.children(&mut inner).any(|c| c.kind() == "type") {
+            continue;
+        }
+        let Some(module) = statement
+            .child_by_field_name("source")
+            .and_then(|s| ts_string_text(s, source))
+            .and_then(|specifier| resolve_specifier(file_path, &specifier, aliases))
+        else {
+            continue;
+        };
+        out.push(RefDecl {
+            from_qualified_path: from.clone(),
+            to_name: MODULE_SCOPE.to_string(),
+            kind: EdgeKind::Imports,
+            to_target: RefTarget::Module(module),
+        });
+    }
+    out
 }
 
 /// Records every name an `import`/`export ... from` statement binds, against the module
@@ -933,10 +994,87 @@ fn last_identifier_text<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
     result
 }
 
+/// One `call_expression`'s references — the call itself, calls hidden in its callee and
+/// arguments, and bare identifiers handed to it as arguments — for `collect_refs`.
+// Same parameters as `collect_refs`, which it's split out of and recurses back into.
+#[allow(clippy::too_many_arguments)]
+fn collect_call(
+    call: Node,
+    source: &[u8],
+    prefix: &str,
+    current_fn: Option<&str>,
+    is_test_file: bool,
+    scope: &FileScope,
+    out: &mut Vec<RefDecl>,
+) {
+    // Outside every function body, the call runs when the file loads: its caller is the
+    // file's module scope. (`prefix` is still the file's own module here — only a test
+    // block changes it, and that sets `current_fn`.)
+    let module_scope = join_path(prefix, MODULE_SCOPE);
+    let from = current_fn.unwrap_or(&module_scope);
+    // A curried call (`withTheme(name, getStyles)(Button)`) calls whatever the inner call
+    // returns, which has no name: the last identifier inside that callee is one of the
+    // inner call's arguments. The inner call is recorded by the recursion below.
+    if let Some(func) = call
+        .child_by_field_name("function")
+        .filter(|func| func.kind() != "call_expression")
+    {
+        if let Some(name) = last_identifier_text(func, source) {
+            out.push(RefDecl {
+                from_qualified_path: from.to_string(),
+                to_name: name.to_string(),
+                kind: EdgeKind::Calls,
+                to_target: call_target(func, source, scope),
+            });
+        }
+    }
+    // A chained call puts its receiver in the callee, not the arguments:
+    // `expect(value).toEqual(x)` and `getUser().save()` both hide a whole call in there,
+    // and descending only into arguments dropped it.
+    if let Some(callee) = call.child_by_field_name("function") {
+        // A curried callee is itself a call, and `collect_refs` only walks a node's
+        // children — handed the inner call, it would never see that call itself.
+        if callee.kind() == "call_expression" {
+            collect_call(callee, source, prefix, current_fn, is_test_file, scope, out);
+        } else {
+            collect_refs(callee, source, prefix, current_fn, is_test_file, scope, out);
+        }
+    }
+    if let Some(args) = call.child_by_field_name("arguments") {
+        // A bare identifier handed as a call argument (`testRunner(theFunction)`,
+        // a saga-testing library's entry point invoking its argument internally)
+        // is a value reference, not a call — the call target extraction above
+        // only ever sees `testRunner`, never `theFunction`. Same shape and same
+        // `References` edge kind as the jsx_attribute/pair/shorthand cases below,
+        // just for a plain positional argument instead of a prop or object value.
+        if let Some(from) = current_fn {
+            let mut inner = args.walk();
+            for argument in args.children(&mut inner) {
+                if argument.kind() != "identifier" {
+                    continue;
+                }
+                if let Ok(name) = argument.utf8_text(source) {
+                    let to_target = scope.bare(name);
+                    if !matches!(to_target, RefTarget::Opaque) {
+                        out.push(RefDecl {
+                            from_qualified_path: from.to_string(),
+                            to_name: name.to_string(),
+                            kind: EdgeKind::References,
+                            to_target,
+                        });
+                    }
+                }
+            }
+        }
+        collect_refs(args, source, prefix, current_fn, is_test_file, scope, out);
+    }
+}
+
 /// Walks the same declaration shapes as `walk`, but descends into function/method bodies
 /// (which `walk` deliberately doesn't) to find `call_expression`s, recording each as a
 /// `RefDecl` from the enclosing function. `current_fn` is `None` outside any function
-/// body, matching `impact-lang-rust`'s `collect_refs`.
+/// body, matching `impact-lang-rust`'s `collect_refs`; a call there is attributed to the
+/// file's module scope instead (see `collect_call`).
 #[allow(clippy::too_many_arguments)]
 fn collect_refs(
     node: Node,
@@ -994,52 +1132,7 @@ fn collect_refs(
                 }
             }
             "call_expression" => {
-                if let (Some(from), Some(func)) =
-                    (current_fn, child.child_by_field_name("function"))
-                {
-                    if let Some(name) = last_identifier_text(func, source) {
-                        out.push(RefDecl {
-                            from_qualified_path: from.to_string(),
-                            to_name: name.to_string(),
-                            kind: EdgeKind::Calls,
-                            to_target: call_target(func, source, scope),
-                        });
-                    }
-                }
-                // A chained call puts its receiver in the callee, not the arguments:
-                // `expect(value).toEqual(x)` and `getUser().save()` both hide a whole
-                // call in there, and descending only into arguments dropped it.
-                if let Some(callee) = child.child_by_field_name("function") {
-                    collect_refs(callee, source, prefix, current_fn, is_test_file, scope, out);
-                }
-                if let Some(args) = child.child_by_field_name("arguments") {
-                    // A bare identifier handed as a call argument (`testRunner(theFunction)`,
-                    // a saga-testing library's entry point invoking its argument internally)
-                    // is a value reference, not a call — the call target extraction above
-                    // only ever sees `testRunner`, never `theFunction`. Same shape and same
-                    // `References` edge kind as the jsx_attribute/pair/shorthand cases below,
-                    // just for a plain positional argument instead of a prop or object value.
-                    if let Some(from) = current_fn {
-                        let mut inner = args.walk();
-                        for argument in args.children(&mut inner) {
-                            if argument.kind() != "identifier" {
-                                continue;
-                            }
-                            if let Ok(name) = argument.utf8_text(source) {
-                                let to_target = scope.bare(name);
-                                if !matches!(to_target, RefTarget::Opaque) {
-                                    out.push(RefDecl {
-                                        from_qualified_path: from.to_string(),
-                                        to_name: name.to_string(),
-                                        kind: EdgeKind::References,
-                                        to_target,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    collect_refs(args, source, prefix, current_fn, is_test_file, scope, out);
-                }
+                collect_call(child, source, prefix, current_fn, is_test_file, scope, out);
             }
             // A bare identifier as an array element (`const sagas = [fooSaga, barSaga]`) —
             // the registry shape a redux-saga-style `array.map(fn => spawn(fn))` root saga

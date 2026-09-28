@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::adapter::{ContractRef, ContractRole, PackageDecl, RefDecl, RefTarget};
+use crate::adapter::{ContractRef, ContractRole, PackageDecl, RefDecl, RefTarget, MODULE_SCOPE};
 use crate::graph::{Confidence, Edge, EdgeKind, Node, NodeId, NodeKind, SymbolGraph};
 
 /// Resolves a name (however precisely an adapter or a user could state it) against a
@@ -44,6 +44,13 @@ pub struct Resolver<'g> {
     /// so a name-keyed map would buy nothing a linear segment-containment scan doesn't
     /// already give `in_module` itself.
     default_exports: Vec<(&'g str, NodeId)>,
+    /// Every module-scope node (see `MODULE_SCOPE`), keyed by each segment of its path —
+    /// consulted only by `module_scope`. There's one per file, all sharing the short name
+    /// `<module>`, so resolving an import through `in_module`'s short-name bucket scanned
+    /// every file in the project once per import, which doubled a 2,700-file app's index
+    /// time. Keying by segment narrows that scan to the files whose path shares the
+    /// import's last segment.
+    module_scopes_by_segment: HashMap<&'g str, Vec<(Vec<&'g str>, NodeId)>>,
 }
 
 impl<'g> Resolver<'g> {
@@ -59,23 +66,30 @@ impl<'g> Resolver<'g> {
         let mut by_short_name: HashMap<&str, Vec<(&str, NodeId)>> = HashMap::new();
         let mut generated = std::collections::HashSet::new();
         let mut default_exports = Vec::new();
+        let mut module_scopes_by_segment: HashMap<&str, Vec<(Vec<&str>, NodeId)>> = HashMap::new();
 
         for node in graph.nodes().filter(|n| keep(n)) {
+            if matches!(node.kind, NodeKind::Module) {
+                let segments: Vec<&str> = node.qualified_path.split("::").collect();
+                for segment in segments.iter().copied() {
+                    module_scopes_by_segment
+                        .entry(segment)
+                        .or_default()
+                        .push((segments.clone(), node.id.clone()));
+                }
+            }
             if node.is_generated {
                 generated.insert(node.id.clone());
             }
             if node.is_default_export {
                 default_exports.push((node.qualified_path.as_str(), node.id.clone()));
             }
-            // `Module` is deliberately excluded: this project doesn't emit any today
-            // (see `impact-lang-rust`'s module-prefix comment), and admitting it would
-            // let a bare crate-root reference resolve to noise. Every other kind is a
-            // legitimate `--change` target — including `Type`, so "remove PaymentService"
-            // and `RemoveField`'s type-path fallback (see `ChangeSpec`) have something to
-            // resolve against, not just functions.
-            if matches!(node.kind, NodeKind::Module) {
-                continue;
-            }
+            // Every kind is resolvable — including `Type`, so "remove PaymentService" and
+            // `RemoveField`'s type-path fallback (see `ChangeSpec`) have something to
+            // resolve against, not just functions. A `Module` node is always a file's
+            // module scope (see `MODULE_SCOPE`), whose `<module>` last segment no call
+            // site's name can match, so only a reference aimed at it on purpose — a
+            // top-level call's `from`, an import — ever resolves to one.
             by_qualified_path.insert(node.qualified_path.as_str(), node.id.clone());
 
             let segments: Vec<&str> = node.qualified_path.split("::").collect();
@@ -100,6 +114,7 @@ impl<'g> Resolver<'g> {
             by_short_name,
             generated,
             default_exports,
+            module_scopes_by_segment,
         }
     }
 
@@ -193,6 +208,9 @@ impl<'g> Resolver<'g> {
     /// appears mid-path in `internal::svc::handler::Handle`. Both are the same question:
     /// is this symbol inside that module?
     fn in_module(&self, module: &str, name: &str) -> Vec<NodeId> {
+        if name == MODULE_SCOPE {
+            return self.module_scope(module);
+        }
         let Some(candidates) = self.by_short_name.get(name) else {
             return Vec::new();
         };
@@ -236,6 +254,33 @@ impl<'g> Resolver<'g> {
         }
     }
 
+    /// The module scope an import of `module` loads — `in_module`'s answer for the name
+    /// `MODULE_SCOPE`, computed without scanning every file (see
+    /// `module_scopes_by_segment`). A file indexed under exactly `module` is the one an
+    /// import of it loads, so that match stands alone; otherwise (`./components` meaning
+    /// `components/index.ts`, an alias whose target path doesn't start at the project
+    /// root) it falls back to the same segment containment `in_module` uses.
+    fn module_scope(&self, module: &str) -> Vec<NodeId> {
+        let wanted: Vec<&str> = module.split("::").filter(|s| !s.is_empty()).collect();
+        let Some(last) = wanted.last() else {
+            return Vec::new();
+        };
+        let Some(candidates) = self.module_scopes_by_segment.get(last) else {
+            return Vec::new();
+        };
+        if let Some((_, id)) = candidates
+            .iter()
+            .find(|(s, _)| scope_owner(s) == wanted.as_slice())
+        {
+            return vec![id.clone()];
+        }
+        candidates
+            .iter()
+            .filter(|(segments, _)| contains_run(scope_owner(segments), &wanted))
+            .map(|(_, id)| id.clone())
+            .collect()
+    }
+
     /// Every node marked `is_default_export` that lives under `module` — the
     /// `ModuleDefault` counterpart to `in_module`, using the same segment-containment
     /// test but never matching on name, since a default import's local alias isn't
@@ -254,6 +299,12 @@ impl<'g> Resolver<'g> {
             .map(|(_, id)| id.clone())
             .collect()
     }
+}
+
+/// A module-scope node's path segments minus the trailing `<module>`: the file's own
+/// module path.
+fn scope_owner<'s, 'a>(segments: &'s [&'a str]) -> &'s [&'a str] {
+    segments.split_last().map(|(_, rest)| rest).unwrap_or(&[])
 }
 
 /// Whether `needle`'s segments appear consecutively, in order, anywhere in `haystack`.

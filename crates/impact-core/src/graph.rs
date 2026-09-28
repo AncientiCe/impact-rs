@@ -50,8 +50,9 @@ pub struct Node {
     /// declaration site of its own), matching `line`'s existing `0` for that case.
     pub end_line: usize,
     pub language: String,
-    /// Whether this `Function` node is a test (`#[test]`, `#[tokio::test]`, ...). Always
-    /// `false` for non-function kinds. Drives the TESTS section of a blast-radius report.
+    /// Whether this `Function` node is a test (`#[test]`, `#[tokio::test]`, ...), or this
+    /// `Module` node is a test file's module scope (see `MODULE_SCOPE`). Always `false`
+    /// for other kinds. Drives the TESTS section of a blast-radius report.
     pub is_test: bool,
     /// See `SymbolDecl::is_generated` — carried through unchanged onto the graph node so
     /// `Resolver::in_module` can read it without a second lookup.
