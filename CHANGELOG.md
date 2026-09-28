@@ -26,6 +26,12 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   importer. Imports inside functions or under `if TYPE_CHECKING:` don't count. A test
   module's scope (`test_*.py`, `*_test.py`) counts as a test. A curried call
   (`register(name, get_styles)(handler)`) is now a call to `register` only.
+- The same query against the same index could give a different report on each run. When
+  a dependent was reachable through several edges in the same hop, it took its
+  confidence from whichever edge was visited first, and visit order came from a hash
+  set. When that edge was `Heuristic`, the dependent's own callers were dropped from the
+  report. It now takes its strongest edge, and ties are broken by node id, so the
+  `--explain` chains are stable too.
 
 ## [0.11.7] - 2026-09-27
 

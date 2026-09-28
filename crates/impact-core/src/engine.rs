@@ -129,7 +129,13 @@ fn compute_impact(graph: &SymbolGraph, seeds: HashSet<NodeId>) -> ImpactReport {
     let mut hop = 0;
     while !frontier.is_empty() {
         hop += 1;
-        let mut next = Vec::new();
+        // Every caller this hop reaches for the first time, with the strongest edge into
+        // it from this hop's frontier and the frontier node that edge comes from. Taking
+        // the first edge visited instead made a dependent's confidence — and, when that
+        // came out `Heuristic`, whether its own callers were reported at all — depend on
+        // the order a hash set handed out the seeds, which differs every run. Ties go to
+        // the smaller `NodeId`, so the `via` chain is as stable as the rest.
+        let mut reached: BTreeMap<NodeId, (Confidence, NodeId)> = BTreeMap::new();
         for node_id in &frontier {
             let Some(node_callers) = callers.get(node_id) else {
                 continue;
@@ -139,32 +145,47 @@ fn compute_impact(graph: &SymbolGraph, seeds: HashSet<NodeId>) -> ImpactReport {
                 .copied()
                 .unwrap_or(Confidence::Exact);
             for (caller, edge_confidence) in node_callers {
-                if !visited.insert(caller.clone()) {
+                if visited.contains(caller) {
                     continue;
                 }
                 let confidence = incoming.weaker(*edge_confidence);
-                node_confidence.insert(caller.clone(), confidence);
-                parent.insert(caller.clone(), node_id.clone());
-                let name = graph
-                    .node(caller)
-                    .map(|n| n.qualified_path.clone())
-                    .unwrap_or_else(|| caller.to_string());
-                let bucket = if hop == 1 { &mut direct } else { &mut indirect };
-                bucket
-                    .entry(name)
-                    .and_modify(|(c, _)| *c = (*c).weaker(confidence))
-                    .or_insert((confidence, caller.clone()));
-                // `Heuristic` is the weakest evidence this tool produces (a bare short
-                // name matching more than one candidate) — still worth reporting (over-
-                // report rather than miss a caller), but not worth trusting as a stepping
-                // stone for further hops: chasing *its* callers would compound one
-                // already-ambiguous match into an unbounded fan-out of further guesses,
-                // most of them unrelated to what was actually queried. Direct/indirect
-                // entries reached only by continuing past a `Heuristic` hop are dropped
-                // here rather than surfaced, not filtered out after the fact.
-                if confidence != Confidence::Heuristic {
-                    next.push(caller.clone());
-                }
+                reached
+                    .entry(caller.clone())
+                    .and_modify(|(best, via)| {
+                        let stronger = confidence != *best && confidence.at_least(*best);
+                        if stronger || (confidence == *best && node_id < via) {
+                            *best = confidence;
+                            *via = node_id.clone();
+                        }
+                    })
+                    .or_insert((confidence, node_id.clone()));
+            }
+        }
+
+        let mut next = Vec::new();
+        for (caller, (confidence, via)) in reached {
+            visited.insert(caller.clone());
+            node_confidence.insert(caller.clone(), confidence);
+            parent.insert(caller.clone(), via);
+            let name = graph
+                .node(&caller)
+                .map(|n| n.qualified_path.clone())
+                .unwrap_or_else(|| caller.to_string());
+            let bucket = if hop == 1 { &mut direct } else { &mut indirect };
+            bucket
+                .entry(name)
+                .and_modify(|(c, _)| *c = (*c).weaker(confidence))
+                .or_insert((confidence, caller.clone()));
+            // `Heuristic` is the weakest evidence this tool produces (a bare short name
+            // matching more than one candidate) — still worth reporting (over-report
+            // rather than miss a caller), but not worth trusting as a stepping stone for
+            // further hops: chasing *its* callers would compound one already-ambiguous
+            // match into an unbounded fan-out of further guesses, most of them unrelated
+            // to what was actually queried. Direct/indirect entries reached only by
+            // continuing past a `Heuristic` hop are dropped here rather than surfaced,
+            // not filtered out after the fact.
+            if confidence != Confidence::Heuristic {
+                next.push(caller);
             }
         }
         frontier = next;
