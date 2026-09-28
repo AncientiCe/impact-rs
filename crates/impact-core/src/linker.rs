@@ -446,6 +446,85 @@ fn is_under(file: &str, root: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
+/// An `Implements` edge from every method of a type satisfying an interface to the spec it
+/// satisfies — structural satisfaction, the way Go decides it with no `implements` clause
+/// to read: a type implements an interface when it has every method the interface
+/// declares, each with the same signature. Nothing in the implementing type's source names
+/// the interface (an adapter package implementing a port usually doesn't), so this is the
+/// only evidence linking the two, and it's the same evidence the compiler uses, hence
+/// `Exact`.
+///
+/// Matching reads `Node::method`, which only an adapter for a structurally typed language
+/// fills in. An interface is skipped when any of its specs has no signature (see
+/// `MethodShape::signature`), since then its method set isn't fully known; so is a match
+/// across languages.
+fn implementations(graph: &SymbolGraph) -> Vec<Edge> {
+    type Methods<'g> = HashMap<&'g str, (&'g NodeId, Option<&'g str>)>;
+    let mut interfaces: HashMap<(&str, &str), Methods> = HashMap::new();
+    let mut types: HashMap<(&str, &str), Methods> = HashMap::new();
+    for node in graph.nodes() {
+        let Some(method) = &node.method else {
+            continue;
+        };
+        let name = node
+            .qualified_path
+            .rsplit("::")
+            .next()
+            .unwrap_or(&node.qualified_path);
+        let owners = if node.is_abstract {
+            &mut interfaces
+        } else {
+            &mut types
+        };
+        owners
+            .entry((node.language.as_str(), method.owner.as_str()))
+            .or_default()
+            .insert(name, (&node.id, method.signature.as_deref()));
+    }
+
+    // Types keyed by each method name they have, so an interface is only compared with
+    // the types sharing one of its method names rather than every type in the project.
+    let mut by_method: HashMap<(&str, &str), Vec<&Methods>> = HashMap::new();
+    for ((language, _), methods) in &types {
+        for name in methods.keys() {
+            by_method.entry((language, name)).or_default().push(methods);
+        }
+    }
+
+    let mut edges = Vec::new();
+    for ((language, _), specs) in &interfaces {
+        if specs.values().any(|(_, signature)| signature.is_none()) {
+            continue;
+        }
+        let Some(first) = specs.keys().min() else {
+            continue;
+        };
+        let Some(candidates) = by_method.get(&(*language, *first)) else {
+            continue;
+        };
+        for methods in candidates {
+            let satisfies = specs.iter().all(|(name, (_, signature))| {
+                methods
+                    .get(name)
+                    .is_some_and(|(_, own)| own.is_some() && own == signature)
+            });
+            if !satisfies {
+                continue;
+            }
+            for (name, (spec, _)) in specs {
+                let (method, _) = methods[name];
+                edges.push(Edge {
+                    from: method.clone(),
+                    to: (*spec).clone(),
+                    kind: EdgeKind::Implements,
+                    confidence: Confidence::Exact,
+                });
+            }
+        }
+    }
+    edges
+}
+
 /// Resolves adapter-emitted `RefDecl`s and `ContractRef`s into graph `Edge`s. This is
 /// structural (name + qualified-path matching), not semantic — it doesn't know about
 /// types, traits, or scope, so a name that could plausibly resolve to several candidates
@@ -538,6 +617,8 @@ pub fn link(
             }
         }
     }
+
+    edges.extend(implementations(graph));
 
     for cr in contract_refs {
         let Some((symbol_ids, confidence)) = resolver.resolve(&cr.symbol_name) else {

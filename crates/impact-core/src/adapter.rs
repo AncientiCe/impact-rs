@@ -2,7 +2,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::graph::{ContractKind, EdgeKind, NodeKind};
+use crate::graph::{ContractKind, EdgeKind, MethodShape, NodeKind};
 
 /// A parsed source file: the tree-sitter tree plus what produced it. `impact-core`
 /// depends on the generic `tree-sitter` crate (parsing infrastructure, language-agnostic)
@@ -64,6 +64,11 @@ pub struct SymbolDecl {
     /// cost the implementation its own confidence. A call the adapter could tie to the
     /// interface itself reaches the spec through its own, type-scoped reference.
     pub is_abstract: bool,
+    /// A method's owner and signature, for linking an interface's method specs to the
+    /// methods satisfying them (see `MethodShape`). Filled in by an adapter whose
+    /// language satisfies interfaces structurally — Go, so far — for interface specs
+    /// (`is_abstract`) and concrete methods alike; `None` everywhere else.
+    pub method: Option<MethodShape>,
 }
 
 /// How far an adapter could narrow down what a reference's `to_name` actually refers to,

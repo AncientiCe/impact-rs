@@ -2,6 +2,22 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+/// What makes a method comparable with an interface's method spec for structural
+/// satisfaction (see `linker::implementations`): the type it belongs to, and its
+/// signature.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MethodShape {
+    /// The type declaring this method, named the same way for every method it has —
+    /// independent of which file each one sits in, since a Go type's methods can be
+    /// spread across its package's files.
+    pub owner: String,
+    /// The parameter and result types, in a form two methods agree on exactly when their
+    /// signatures match. `None` when the adapter can't state it — for an interface's spec,
+    /// that keeps the whole interface out of satisfaction matching, since a type matching
+    /// only part of an interface's method set isn't an implementation of it.
+    pub signature: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ContractKind {
     ApiRoute,
@@ -63,6 +79,9 @@ pub struct Node {
     /// See `SymbolDecl::is_abstract` — carried through unchanged onto the graph node so
     /// `Resolver::in_module` can read it without a second lookup.
     pub is_abstract: bool,
+    /// See `SymbolDecl::method` — carried through unchanged onto the graph node so
+    /// `linker::implementations` can read it without a second lookup.
+    pub method: Option<MethodShape>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

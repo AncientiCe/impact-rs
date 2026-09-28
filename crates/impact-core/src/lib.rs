@@ -23,7 +23,9 @@ pub use engine::{
     compute_symbol_impact, filter_min_confidence, summarize, Dependent, ImpactReport,
     IndirectFileGroup, SummaryCounts, SummaryReport, DEFAULT_SUMMARY_GROUP_LIMIT,
 };
-pub use graph::{Confidence, ContractKind, Edge, EdgeKind, Node, NodeId, NodeKind, SymbolGraph};
+pub use graph::{
+    Confidence, ContractKind, Edge, EdgeKind, MethodShape, Node, NodeId, NodeKind, SymbolGraph,
+};
 pub use indexer::{IndexStats, Indexer};
 pub use linker::{link, Resolver};
 pub use scope::FileScope;

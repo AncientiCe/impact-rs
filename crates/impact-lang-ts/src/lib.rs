@@ -141,6 +141,7 @@ impl LanguageAdapter for TsAdapter {
             is_generated: false,
             is_default_export: false,
             is_abstract: false,
+            method: None,
         }];
         walk(
             ast.tree.root_node(),
@@ -360,6 +361,7 @@ fn push(
         is_generated: false,
         is_default_export: false,
         is_abstract: false,
+        method: None,
     });
 }
 

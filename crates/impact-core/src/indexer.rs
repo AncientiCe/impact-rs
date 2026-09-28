@@ -219,6 +219,7 @@ impl<'a> Indexer<'a> {
                     is_generated: decl.is_generated,
                     is_default_export: decl.is_default_export,
                     is_abstract: decl.is_abstract,
+                    method: decl.method,
                 })
                 .collect();
 
@@ -284,6 +285,7 @@ impl<'a> Indexer<'a> {
                 is_generated: false,
                 is_default_export: false,
                 is_abstract: false,
+                method: None,
             };
             graph.insert_node(node.clone());
             synthesized.push(node);

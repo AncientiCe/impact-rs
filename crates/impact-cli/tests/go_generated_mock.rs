@@ -80,15 +80,24 @@ fn real_implementation_resolves_at_exact_despite_generated_mock() {
 
     assert_eq!(
         report["direct"],
-        serde_json::json!([{
-            "path": "usecase::usecase::UseCase::Do",
-            "file": "usecase/usecase.go",
-            "line": 11,
-            "confidence": "Exact",
-        }]),
+        serde_json::json!([
+            {
+                "path": "repository::interface::Repository::Notify",
+                "file": "repository/interface.go",
+                "line": 6,
+                "confidence": "Exact",
+            },
+            {
+                "path": "usecase::usecase::UseCase::Do",
+                "file": "usecase/usecase.go",
+                "line": 11,
+                "confidence": "Exact",
+            },
+        ]),
         "the interface-typed call through repository.Repository should resolve to the \
          real HTTPRepository, not be diluted by the generated MockRepository sharing its \
-         package and method name: {report}"
+         package and method name; the spec HTTPRepository satisfies depends on it too: \
+         {report}"
     );
 }
 

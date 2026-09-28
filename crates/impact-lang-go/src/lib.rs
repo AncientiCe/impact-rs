@@ -32,7 +32,7 @@ use std::path::Path;
 
 use impact_core::{
     ContractKind, ContractRef, ContractRole, DetectorConfig, EdgeKind, FileAst, FileScope,
-    LanguageAdapter, NodeKind, RefDecl, RefTarget, SymbolDecl,
+    LanguageAdapter, MethodShape, NodeKind, RefDecl, RefTarget, SymbolDecl,
 };
 use tree_sitter::Node;
 
@@ -170,6 +170,7 @@ fn push(
         is_generated,
         is_default_export: false,
         is_abstract: false,
+        method: None,
     });
 }
 
@@ -271,6 +272,12 @@ fn walk(
                             false,
                             is_generated_file,
                         );
+                        if let Some(symbol) = out.last_mut() {
+                            symbol.method = Some(MethodShape {
+                                owner: join_path(&package_module(prefix), receiver_type),
+                                signature: signature(child, source),
+                            });
+                        }
                     }
                 }
             }
@@ -285,17 +292,27 @@ fn walk(
                         is_generated_file,
                     );
                 }
-                for (interface, method, spec) in interface_method_specs(child, source) {
+                for spec in interface_method_specs(child, source) {
                     push(
                         out,
                         NodeKind::Function,
-                        join_path(&join_path(prefix, interface), method),
-                        spec,
+                        join_path(&join_path(prefix, spec.interface), spec.method),
+                        spec.node,
                         false,
                         is_generated_file,
                     );
                     if let Some(symbol) = out.last_mut() {
                         symbol.is_abstract = true;
+                        symbol.method = Some(MethodShape {
+                            owner: join_path(&package_module(prefix), spec.interface),
+                            // An embedding interface's method set continues elsewhere, so
+                            // no type can be matched against these specs alone.
+                            signature: if spec.embeds {
+                                None
+                            } else {
+                                signature(spec.node, source)
+                            },
+                        });
                     }
                 }
             }
@@ -316,19 +333,26 @@ fn walk(
     }
 }
 
-/// Every method an interface declared here names — `(interface, method, method_elem)` for
-/// each `method_elem` in each `type_spec` whose type is an `interface_type`, which covers a
-/// grouped `type ( ... )` declaration too. An interface's method spec is where a signature
-/// change starts: it breaks every implementation and every caller at once, so it needs a
-/// symbol of its own to be queried at all. Before this, only the interface's type was
-/// indexed, so a report on the file declaring it came back empty.
-///
-/// An embedded interface (`type_elem`, e.g. `io.Reader` inside `ReadCloser`) contributes no
-/// spec here — its methods are declared, and indexed, where that interface is.
+/// One method an interface declared here names: see `interface_method_specs`.
+struct InterfaceMethodSpec<'a> {
+    interface: &'a str,
+    method: &'a str,
+    node: Node<'a>,
+    /// Whether the interface also embeds another (`type_elem`, e.g. `io.Reader` inside
+    /// `ReadCloser`), whose methods are declared — and indexed — where that one is.
+    embeds: bool,
+}
+
+/// Every method an interface declared here names — each `method_elem` in each `type_spec`
+/// whose type is an `interface_type`, which covers a grouped `type ( ... )` declaration
+/// too. An interface's method spec is where a signature change starts: it breaks every
+/// implementation and every caller at once, so it needs a symbol of its own to be queried
+/// at all. Before this, only the interface's type was indexed, so a report on the file
+/// declaring it came back empty.
 fn interface_method_specs<'a>(
     declaration: Node<'a>,
     source: &'a [u8],
-) -> Vec<(&'a str, &'a str, Node<'a>)> {
+) -> Vec<InterfaceMethodSpec<'a>> {
     let mut out = Vec::new();
     let mut cursor = declaration.walk();
     for spec in declaration.children(&mut cursor) {
@@ -345,15 +369,88 @@ fn interface_method_specs<'a>(
             continue;
         };
         let mut body_cursor = body.walk();
-        for element in body.children(&mut body_cursor) {
+        let elements: Vec<Node> = body.children(&mut body_cursor).collect();
+        let embeds = elements.iter().any(|e| e.kind() == "type_elem");
+        for element in elements {
             if element.kind() != "method_elem" {
                 continue;
             }
             if let Some(method) = field_text(element, "name", source) {
-                out.push((interface, method, element));
+                out.push(InterfaceMethodSpec {
+                    interface,
+                    method,
+                    node: element,
+                    embeds,
+                });
             }
         }
     }
+    out
+}
+
+/// A method's parameter and result types — `(string,string)(error)` for
+/// `Save(id, value string) error` — the way two methods agree exactly when Go would call
+/// their signatures identical: parameter names dropped, each name of a shared type
+/// counted, and package qualifiers stripped (`context.Context` is `Context`), since the
+/// same type is written with a qualifier in one package and without it in its own.
+/// Stripping can equate two different packages' same-named types; comparing every method
+/// of an interface, not just one, is what keeps that from linking unrelated types.
+fn signature(method: Node, source: &[u8]) -> Option<String> {
+    let parameters = type_list(method.child_by_field_name("parameters")?, source)?;
+    let results = match method.child_by_field_name("result") {
+        None => String::new(),
+        Some(result) if result.kind() == "parameter_list" => type_list(result, source)?,
+        Some(result) => normalize_type(result.utf8_text(source).ok()?),
+    };
+    Some(format!("({parameters})({results})"))
+}
+
+fn type_list(list: Node, source: &[u8]) -> Option<String> {
+    let mut types = Vec::new();
+    let mut cursor = list.walk();
+    for parameter in list.named_children(&mut cursor) {
+        let variadic = match parameter.kind() {
+            "parameter_declaration" => "",
+            "variadic_parameter_declaration" => "...",
+            _ => continue,
+        };
+        let text = normalize_type(
+            parameter
+                .child_by_field_name("type")?
+                .utf8_text(source)
+                .ok()?,
+        );
+        let mut names = parameter.walk();
+        let count = parameter
+            .children_by_field_name("name", &mut names)
+            .count()
+            .max(1);
+        for _ in 0..count {
+            types.push(format!("{variadic}{text}"));
+        }
+    }
+    Some(types.join(","))
+}
+
+/// A type's source text without whitespace or package qualifiers: `map[string] *store.Order`
+/// becomes `map[string]*Order`.
+fn normalize_type(text: &str) -> String {
+    let mut out = String::new();
+    let mut identifier = String::new();
+    for c in text.chars().filter(|c| !c.is_whitespace()) {
+        if c.is_alphanumeric() || c == '_' {
+            identifier.push(c);
+            continue;
+        }
+        if c == '.' && !identifier.is_empty() {
+            identifier.clear();
+            continue;
+        }
+        out.push_str(&identifier);
+        identifier.clear();
+        out.push(c);
+    }
+    out.push_str(&identifier);
     out
 }
 

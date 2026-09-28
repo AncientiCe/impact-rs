@@ -75,14 +75,23 @@ fn field_selector_call_resolves_at_exact_confidence() {
 
     assert_eq!(
         report["direct"],
-        serde_json::json!([{
-            "path": "usecase::usecase::UseCase::Do",
-            "file": "usecase/usecase.go",
-            "line": 13,
-            "confidence": "Exact",
-        }]),
+        serde_json::json!([
+            {
+                "path": "changes::repository::Repository::AddOperation",
+                "file": "changes/repository.go",
+                "line": 6,
+                "confidence": "Exact",
+            },
+            {
+                "path": "usecase::usecase::UseCase::Do",
+                "file": "usecase/usecase.go",
+                "line": 13,
+                "confidence": "Exact",
+            },
+        ]),
         "uc.ChangesRepository.AddOperation(...) should resolve to repositoryImpl::AddOperation \
-         at Exact confidence, via the field's declared interface type's package: {report}"
+         at Exact confidence, via the field's declared interface type's package; the spec \
+         repositoryImpl satisfies depends on it too: {report}"
     );
 }
 

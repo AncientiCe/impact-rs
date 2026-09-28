@@ -8,3 +8,7 @@ type MockStore struct{}
 func (m *MockStore) Fetch(id string) (string, error) {
 	return "", nil
 }
+
+func (m *MockStore) Save(id string, value string) error {
+	return nil
+}

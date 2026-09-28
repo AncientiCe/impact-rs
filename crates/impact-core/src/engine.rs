@@ -95,6 +95,11 @@ pub fn apply_explain(mut report: ImpactReport, explain: bool) -> ImpactReport {
 /// one calling into it — without it, querying an event's own definition file would report
 /// nothing, even though every producer and consumer of that event is exactly its blast
 /// radius.
+///
+/// `Implements` edges are walked both ways: a method implementing an interface's spec
+/// depends on the spec (changing the spec breaks it), and the spec depends on the method
+/// (changing the method stops its type satisfying the interface, which reaches every call
+/// made through the interface).
 fn compute_impact(graph: &SymbolGraph, seeds: HashSet<NodeId>) -> ImpactReport {
     let mut callers: HashMap<NodeId, Vec<(NodeId, Confidence)>> = HashMap::new();
     for edge in graph.edges() {
@@ -112,6 +117,14 @@ fn compute_impact(graph: &SymbolGraph, seeds: HashSet<NodeId>) -> ImpactReport {
                 .entry(edge.to.clone())
                 .or_default()
                 .push((edge.from.clone(), edge.confidence));
+        }
+        if edge.kind == EdgeKind::Implements {
+            for (to, from) in [(&edge.to, &edge.from), (&edge.from, &edge.to)] {
+                callers
+                    .entry(to.clone())
+                    .or_default()
+                    .push((from.clone(), edge.confidence));
+            }
         }
     }
 

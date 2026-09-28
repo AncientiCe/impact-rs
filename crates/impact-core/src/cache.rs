@@ -12,7 +12,7 @@ use crate::graph::{ContractKind, Edge, EdgeKind, Node, SymbolGraph};
 /// `migrate` compares this against the database's own `PRAGMA user_version` and wipes
 /// every table before recreating them on a mismatch — simpler and safer than writing a
 /// column-by-column migration for a local, fully-rebuildable index cache.
-const SCHEMA_VERSION: i32 = 7;
+const SCHEMA_VERSION: i32 = 8;
 
 /// The build of `impact` that wrote a cache, recorded in the `meta` table. A cache is
 /// only reusable when this matches the running build: content hashes tell us whether a
@@ -92,7 +92,8 @@ impl Cache {
                 is_test INTEGER NOT NULL DEFAULT 0,
                 is_generated INTEGER NOT NULL DEFAULT 0,
                 is_default_export INTEGER NOT NULL DEFAULT 0,
-                is_abstract INTEGER NOT NULL DEFAULT 0
+                is_abstract INTEGER NOT NULL DEFAULT 0,
+                method TEXT
             );
             CREATE INDEX IF NOT EXISTS nodes_file_idx ON nodes(file);
             CREATE TABLE IF NOT EXISTS edges (
@@ -239,8 +240,8 @@ impl Cache {
         for node in nodes {
             let kind_json = serde_json::to_string(&node.kind)?;
             tx.execute(
-                "INSERT OR REPLACE INTO nodes (id, kind, qualified_path, file, line, end_line, language, is_test, is_generated, is_default_export, is_abstract)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                "INSERT OR REPLACE INTO nodes (id, kind, qualified_path, file, line, end_line, language, is_test, is_generated, is_default_export, is_abstract, method)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     node.id.0,
                     kind_json,
@@ -253,6 +254,7 @@ impl Cache {
                     node.is_generated as i64,
                     node.is_default_export as i64,
                     node.is_abstract as i64,
+                    node.method.as_ref().map(serde_json::to_string).transpose()?,
                 ],
             )?;
         }
@@ -358,8 +360,8 @@ impl Cache {
         for node in nodes {
             let kind_json = serde_json::to_string(&node.kind)?;
             tx.execute(
-                "INSERT OR REPLACE INTO nodes (id, kind, qualified_path, file, line, end_line, language, is_test, is_generated, is_default_export, is_abstract)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                "INSERT OR REPLACE INTO nodes (id, kind, qualified_path, file, line, end_line, language, is_test, is_generated, is_default_export, is_abstract, method)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     node.id.0,
                     kind_json,
@@ -372,6 +374,7 @@ impl Cache {
                     node.is_generated as i64,
                     node.is_default_export as i64,
                     node.is_abstract as i64,
+                    node.method.as_ref().map(serde_json::to_string).transpose()?,
                 ],
             )?;
         }
@@ -404,7 +407,7 @@ impl Cache {
         let mut graph = SymbolGraph::new();
 
         let mut node_stmt = self.conn.prepare(
-            "SELECT id, kind, qualified_path, file, line, end_line, language, is_test, is_generated, is_default_export, is_abstract FROM nodes",
+            "SELECT id, kind, qualified_path, file, line, end_line, language, is_test, is_generated, is_default_export, is_abstract, method FROM nodes",
         )?;
         let node_rows = node_stmt.query_map([], |row| {
             let id: String = row.get(0)?;
@@ -418,6 +421,7 @@ impl Cache {
             let is_generated: i64 = row.get(8)?;
             let is_default_export: i64 = row.get(9)?;
             let is_abstract: i64 = row.get(10)?;
+            let method: Option<String> = row.get(11)?;
             Ok((
                 id,
                 kind_json,
@@ -430,6 +434,7 @@ impl Cache {
                 is_generated,
                 is_default_export,
                 is_abstract,
+                method,
             ))
         })?;
         for row in node_rows {
@@ -445,6 +450,7 @@ impl Cache {
                 is_generated,
                 is_default_export,
                 is_abstract,
+                method,
             ) = row?;
             let kind = serde_json::from_str(&kind_json)?;
             graph.insert_node(Node {
@@ -459,6 +465,7 @@ impl Cache {
                 is_generated: is_generated != 0,
                 is_default_export: is_default_export != 0,
                 is_abstract: is_abstract != 0,
+                method: method.as_deref().map(serde_json::from_str).transpose()?,
             });
         }
 

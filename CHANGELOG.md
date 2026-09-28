@@ -16,8 +16,19 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   implementing it in the interface's package. The implementations keep their own
   confidence: a package-scoped call prefers a concrete method over the interface's spec,
   as it already preferred a real method over a generated mock. An embedded interface
-  contributes no specs of its own. The cache schema moves to v7, so the first index after
-  upgrading rebuilds from scratch.
+  contributes no specs of its own.
+- Go: an interface's method specs are linked to the methods implementing them, found
+  the way the compiler finds them: a type implements an interface when it has every
+  method the interface declares with the same signature (parameter and result types,
+  names dropped, package qualifiers stripped), in any package or file. Changing an
+  interface method now reports every implementation, generated mocks and test fakes
+  included; changing an implementation reports the spec it satisfies and, through it,
+  every call made through the interface, which for an adapter implementing a port in
+  another package was nothing at all before. An interface embedding another is left out
+  of matching, since its full method set isn't visible where it's declared. Not covered:
+  a mockgen recorder's `EXPECT().Method(...)` call sites, whose recorder takes
+  `interface{}` arguments and doesn't implement the interface. The cache schema moves to
+  v8, so the first index after upgrading rebuilds from scratch.
 
 ## [0.11.8] - 2026-09-28
 
