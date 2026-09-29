@@ -4,6 +4,17 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.11.10] - 2026-09-29
+
+### Added
+
+- Agents are now asked to put impact's blast radius in the description of the pull or merge
+  request they open. The installed rule gains an *Opening a pull request* trigger
+  (`impact_diff` on `git diff <base>...HEAD`, report what it returned and what was done about
+  it), and the Claude Code `PreToolUse` hook reminds on `gh pr create` and `glab mr create`
+  the same way it already does on `git commit`. Re-run `impact install` to pick up the new
+  rule; `impact doctor` flags an installed rule that is out of date.
+
 ## [0.11.9] - 2026-09-28
 
 ### Fixed
