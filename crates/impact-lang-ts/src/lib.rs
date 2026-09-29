@@ -569,11 +569,16 @@ fn bind_named_imports(list: Node, source: &[u8], module: &str, scope: &mut FileS
         if !matches!(child.kind(), "import_specifier" | "export_specifier") {
             continue;
         }
-        let local = child
+        let name = child
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok());
+        let alias = child
             .child_by_field_name("alias")
-            .or_else(|| child.child_by_field_name("name"));
-        if let Some(name) = local.and_then(|n| n.utf8_text(source).ok()) {
-            scope.add_import(name, module);
+            .and_then(|n| n.utf8_text(source).ok());
+        match (name, alias) {
+            (Some(original), Some(local)) => scope.add_aliased_import(local, original, module),
+            (Some(name), None) => scope.add_import(name, module),
+            _ => {}
         }
     }
 }
@@ -1024,6 +1029,13 @@ fn collect_call(
         .filter(|func| func.kind() != "call_expression")
     {
         if let Some(name) = last_identifier_text(func, source) {
+            // Only a bare callee can be a local alias of an import; in `ns.print()` the
+            // name is a member of whatever `ns` is, which no alias of ours renames.
+            let name = if func.kind() == "identifier" {
+                scope.original_name(name)
+            } else {
+                name
+            };
             out.push(RefDecl {
                 from_qualified_path: from.to_string(),
                 to_name: name.to_string(),
@@ -1062,7 +1074,7 @@ fn collect_call(
                     if !matches!(to_target, RefTarget::Opaque) {
                         out.push(RefDecl {
                             from_qualified_path: from.to_string(),
-                            to_name: name.to_string(),
+                            to_name: scope.original_name(name).to_string(),
                             kind: EdgeKind::References,
                             to_target,
                         });
@@ -1155,7 +1167,7 @@ fn collect_refs(
                             if !matches!(to_target, RefTarget::Opaque) {
                                 out.push(RefDecl {
                                     from_qualified_path: from.to_string(),
-                                    to_name: name.to_string(),
+                                    to_name: scope.original_name(name).to_string(),
                                     kind: EdgeKind::References,
                                     to_target,
                                 });
@@ -1209,7 +1221,7 @@ fn collect_refs(
                             if !matches!(to_target, RefTarget::Opaque) {
                                 out.push(RefDecl {
                                     from_qualified_path: from.to_string(),
-                                    to_name: name.to_string(),
+                                    to_name: scope.original_name(name).to_string(),
                                     kind: EdgeKind::References,
                                     to_target,
                                 });
@@ -1237,7 +1249,7 @@ fn collect_refs(
                             if !matches!(to_target, RefTarget::Opaque) {
                                 out.push(RefDecl {
                                     from_qualified_path: from.to_string(),
-                                    to_name: name.to_string(),
+                                    to_name: scope.original_name(name).to_string(),
                                     kind: EdgeKind::References,
                                     to_target,
                                 });
@@ -1256,7 +1268,7 @@ fn collect_refs(
                                 if !matches!(to_target, RefTarget::Opaque) {
                                     out.push(RefDecl {
                                         from_qualified_path: from.to_string(),
-                                        to_name: name.to_string(),
+                                        to_name: scope.original_name(name).to_string(),
                                         kind: EdgeKind::References,
                                         to_target,
                                     });
@@ -1276,7 +1288,7 @@ fn collect_refs(
                         if !matches!(to_target, RefTarget::Opaque) {
                             out.push(RefDecl {
                                 from_qualified_path: from.to_string(),
-                                to_name: name.to_string(),
+                                to_name: scope.original_name(name).to_string(),
                                 kind: EdgeKind::References,
                                 to_target,
                             });

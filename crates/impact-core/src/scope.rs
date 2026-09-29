@@ -19,6 +19,7 @@ pub struct FileScope {
     module: String,
     imports: HashMap<String, String>,
     default_imports: HashMap<String, String>,
+    aliases: HashMap<String, String>,
     locals: HashSet<String>,
     wildcards: Vec<String>,
     unimported: RefTarget,
@@ -36,6 +37,7 @@ impl FileScope {
             module: module.into(),
             imports: HashMap::new(),
             default_imports: HashMap::new(),
+            aliases: HashMap::new(),
             locals: HashSet::new(),
             wildcards: Vec::new(),
             unimported,
@@ -46,6 +48,29 @@ impl FileScope {
     /// imported from.
     pub fn add_import(&mut self, local_name: impl Into<String>, module: impl Into<String>) {
         self.imports.insert(local_name.into(), module.into());
+    }
+
+    /// Binds `local_name` to the module it was imported from, remembering that it stands
+    /// for `original_name` there (`import { print as render }` binds `render` to `print`).
+    /// The target module only knows the exported name, so a reference recorded under the
+    /// local one would never match a symbol in it; `original_name` is how the adapter
+    /// records the reference under the exported name instead.
+    pub fn add_aliased_import(
+        &mut self,
+        local_name: impl Into<String>,
+        original_name: impl Into<String>,
+        module: impl Into<String>,
+    ) {
+        let local_name = local_name.into();
+        self.aliases
+            .insert(local_name.clone(), original_name.into());
+        self.imports.insert(local_name, module.into());
+    }
+
+    /// The name a bare reference to `name` should be recorded under: the exported name
+    /// when `name` is a local alias of one, `name` itself otherwise.
+    pub fn original_name<'a>(&'a self, name: &'a str) -> &'a str {
+        self.aliases.get(name).map_or(name, String::as_str)
     }
 
     /// Binds `local_name` to the module a *default* import brought it in from — same

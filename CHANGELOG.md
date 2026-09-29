@@ -4,6 +4,16 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- TypeScript: a function imported under a local alias (`import { print as render } from
+  './printer'`) is now linked as a caller of the exported function
+  ([#11](https://github.com/AncientiCe/impact-rs/issues/11)). The call was recorded under the
+  alias, which the target module has no symbol for, so the aliased caller and everything that
+  reaches the function through it were missing from `impact_file`/`impact_change`. Named
+  imports, `export { a as b } from`, and value references (JSX tags and attributes, call
+  arguments, array elements, object values) all resolve to the exported name now.
+
 ## [0.11.10] - 2026-09-29
 
 ### Added
