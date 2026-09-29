@@ -177,6 +177,32 @@ fn installed_rule_has_an_unconditional_session_start_trigger() {
     );
 }
 
+/// The blast radius a reviewer can't see on their own belongs in the description of the
+/// pull/merge request, so the rule has to ask for it when one is opened.
+#[test]
+fn installed_rule_asks_for_the_blast_radius_in_pull_request_descriptions() {
+    let home = tempfile::tempdir().unwrap();
+
+    install(home.path(), &[]);
+
+    let rule = fs::read_to_string(rule_path(home.path())).unwrap();
+    let section = rule
+        .split("## OPENING A PULL REQUEST")
+        .nth(1)
+        .unwrap_or_else(|| panic!("rule should carry a pull-request trigger: {rule}"))
+        .split("## BLIND SPOT FOUND")
+        .next()
+        .unwrap_or_default();
+    assert!(
+        section.contains("impact_diff") && section.contains("description"),
+        "the pull-request trigger should put the diff's blast radius in the description: {rule}"
+    );
+    assert!(
+        section.contains("merge request"),
+        "the pull-request trigger should cover merge requests too: {rule}"
+    );
+}
+
 /// "Before renaming, removing, or changing a signature" makes the agent classify its own
 /// change before the trigger can fire — a step it skips exactly when it is moving fast and
 /// the change is riskiest. The rule must also state checkpoints that need no judgment

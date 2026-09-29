@@ -8,7 +8,7 @@ pub const RULE_END: &str = "<!-- END IMPACT -->";
 
 pub const RULE_BODY: &str = r#"# Impact Blast-Radius Protocol — MANDATORY
 
-**MANDATORY — three hard triggers, every task, no exceptions.**
+**MANDATORY — four hard triggers, every task, no exceptions.**
 
 ## SESSION START
 *Unconditional. Once, when you first start working in a project — before you know
@@ -42,6 +42,17 @@ approach it" discussion that hasn't settled on a concrete target doesn't need it
 → Re-run `impact_index` (results are only as fresh as the last index), then re-run
   `impact_file`/`impact_change` against the same target to confirm the blast radius you
   addressed matches what's reported now, and nothing new appeared.
+
+## OPENING A PULL REQUEST
+*When you open a pull request or merge request (`gh pr create`, `glab mr create`, or
+any other route), whether or not you edited code in this session.*
+→ Call `impact_diff` on the change it carries (`git diff <base>...HEAD`) if impact is
+  available.
+→ Put what it reports in the description: the callers, routes, events, tables and tests
+  the change reaches, and what you did about them. A reviewer can't see the graph; the
+  description is where it reaches them.
+→ Report only what impact returned. If it found nothing, or missed a caller you know
+  about, say that rather than smoothing it over.
 
 ## BLIND SPOT FOUND
 *Only after you've manually confirmed — by reading the code or grepping, not by

@@ -32,7 +32,7 @@ TESTS
 - **`impact change "<description>"`** — the same blast radius for a specific symbol-level change, described in a small deterministic grammar (never natural language, so the same input always resolves the same way): `rename <path>`, `remove <path>`, `remove variant <Enum>::<Variant>`, `remove field <Type>.<field>`, `change signature of <path>`.
 - **`impact diff`** — the combined blast radius of a unified diff (`git diff | impact diff`, or `impact diff --file some.patch`): every symbol the diff's touched lines fall inside, across every file it mentions, in one call instead of one `impact query` per touched file. Requires the project to be indexed against the diff's *new* side — the working tree as it currently stands, which is what `git diff` on uncommitted changes already matches.
 - **`impact mcp`** — an MCP stdio server exposing `impact_index` / `impact_file` / `impact_change` / `impact_diff` as tools, so an agent can call this directly instead of reading the whole codebase to guess what a change affects.
-- **`impact hook pre-tool-use`** — a Claude Code `PreToolUse` hook: reads the hook payload on stdin and reminds the agent to check blast radius at the two moments the protocol names — the session's first file edit, and any `git commit`. `impact install` registers it in `settings.json`; a rule can be read once and forgotten, a hook fires whether or not the agent remembered.
+- **`impact hook pre-tool-use`** — a Claude Code `PreToolUse` hook: reads the hook payload on stdin and reminds the agent to check blast radius at the moments the protocol names — the session's first file edit, any `git commit`, and opening a pull or merge request (`gh pr create`, `glab mr create`), where it asks for the `impact_diff` blast radius in the description. `impact install` registers it in `settings.json`; a rule can be read once and forgotten, a hook fires whether or not the agent remembered.
 - **Cross-project impact** — register sibling repos in a `workspace.toml` and `--workspace` extends a report with which *other* projects share the same API route / event / table identity, confidence-tiered (`Declared` / `Strong` / `Weak`) so identity coincidences don't masquerade as real dependencies.
 
 Supports Rust, TypeScript/TSX (React), JavaScript/JSX (React Native), Python, Go, Kotlin (Android), Swift, and C++ today. The core (`impact-core`) is language-agnostic by design — each language is a pluggable adapter (tree-sitter-based symbol/call extraction), and adding another language means writing one more adapter crate, not touching the engine, linker, or MCP surface. Every adapter after the first (Rust) proved that boundary holds by adding zero lines to `impact-core`.
@@ -152,14 +152,14 @@ impact install --no-hook       # rule and MCP server only, no Claude Code hook
 impact doctor                  # check what's configured and whether the rule and hook are current
 ```
 
-For Claude Code it also registers a `PreToolUse` hook in `settings.json`, merging into whatever hooks are already there. That is the part that does not depend on the agent remembering anything: the client runs `impact hook pre-tool-use` before the session's first file edit and before any `git commit`, and the reminder comes back as context whether or not the rule above was still in mind. `impact uninstall` removes only impact's own entry.
+For Claude Code it also registers a `PreToolUse` hook in `settings.json`, merging into whatever hooks are already there. That is the part that does not depend on the agent remembering anything: the client runs `impact hook pre-tool-use` before the session's first file edit, before any `git commit`, and before a pull or merge request is opened, and the reminder comes back as context whether or not the rule above was still in mind. `impact uninstall` removes only impact's own entry.
 
 The rule text `impact install` writes — reproduced here for any other MCP-speaking agent (or CI system prompt) it doesn't have a built-in installer for:
 
 ```text
 # Impact Blast-Radius Protocol — MANDATORY
 
-**MANDATORY — three hard triggers, every task, no exceptions.**
+**MANDATORY — four hard triggers, every task, no exceptions.**
 
 ## SESSION START
 *Unconditional. Once, when you first start working in a project — before you know
@@ -193,6 +193,17 @@ approach it" discussion that hasn't settled on a concrete target doesn't need it
 → Re-run `impact_index` (results are only as fresh as the last index), then re-run
   `impact_file`/`impact_change` against the same target to confirm the blast radius you
   addressed matches what's reported now, and nothing new appeared.
+
+## OPENING A PULL REQUEST
+*When you open a pull request or merge request (`gh pr create`, `glab mr create`, or
+any other route), whether or not you edited code in this session.*
+→ Call `impact_diff` on the change it carries (`git diff <base>...HEAD`) if impact is
+  available.
+→ Put what it reports in the description: the callers, routes, events, tables and tests
+  the change reaches, and what you did about them. A reviewer can't see the graph; the
+  description is where it reaches them.
+→ Report only what impact returned. If it found nothing, or missed a caller you know
+  about, say that rather than smoothing it over.
 
 ## BLIND SPOT FOUND
 *Only after you've manually confirmed — by reading the code or grepping, not by
