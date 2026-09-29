@@ -2,8 +2,8 @@
 //!
 //! The agent rule (`install::rule`) states the protocol, but a rule is read once and
 //! competes for attention with everything else in the session. A hook is mechanical: the
-//! client runs it whether or not the agent remembered, at exactly the two checkpoints the
-//! rule names — the session's first edit, and any commit.
+//! client runs it whether or not the agent remembered, at the checkpoints the rule names —
+//! the session's first edit, any commit, and opening a pull or merge request.
 //!
 //! Currently Claude Code's `PreToolUse` shape: the hook payload arrives as JSON on stdin,
 //! and a JSON response on stdout feeds `additionalContext` back to the agent. Anything it
@@ -32,6 +32,13 @@ const COMMIT_REMINDER: &str = "Impact protocol — this commit is about to leave
     working tree. Re-run impact_index (results are only as fresh as the last index), then \
     impact_diff on the `git diff` you're committing, and confirm the blast radius you \
     addressed is what's reported now and nothing new appeared.";
+
+const PULL_REQUEST_REMINDER: &str = "Impact protocol — a pull/merge request is about to be \
+    opened. Run impact_diff on the change it carries (`git diff <base>...HEAD`) and put the \
+    blast radius it reports in the description: the callers, routes, events, tables and \
+    tests the change reaches, and what you did about them. A reviewer can't see the graph; \
+    the description is where it reaches them. If impact isn't indexed for this project yet, \
+    call impact_index first.";
 
 pub fn pre_tool_use() -> Result<()> {
     let mut payload = String::new();
@@ -74,6 +81,9 @@ fn reminder_for(payload: &str) -> Option<&'static str> {
         if is_git_commit(command) {
             return Some(COMMIT_REMINDER);
         }
+        if opens_pull_request(command) {
+            return Some(PULL_REQUEST_REMINDER);
+        }
     }
     None
 }
@@ -87,6 +97,23 @@ fn is_git_commit(command: &str) -> bool {
             .next()
             .is_some_and(|first| first == "git" || first.ends_with("/git"));
         runs_git && tokens.any(|token| token == "commit")
+    })
+}
+
+/// Whether `command` opens a pull or merge request — `gh pr create` or `glab mr create`,
+/// matched per shell segment on the tokens, so flags between the tool and its subcommand
+/// (`gh -R owner/repo pr create`) count and `echo "gh pr create"` doesn't.
+fn opens_pull_request(command: &str) -> bool {
+    command.split(['\n', ';', '&', '|']).any(|segment| {
+        let mut tokens = segment.split_whitespace();
+        let noun = match tokens.next() {
+            Some(first) if first == "gh" || first.ends_with("/gh") => "pr",
+            Some(first) if first == "glab" || first.ends_with("/glab") => "mr",
+            _ => return false,
+        };
+        let rest: Vec<&str> = tokens.collect();
+        rest.windows(2)
+            .any(|pair| pair[0] == noun && pair[1] == "create")
     })
 }
 

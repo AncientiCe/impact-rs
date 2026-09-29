@@ -135,6 +135,43 @@ fn a_commit_gets_the_after_editing_reminder() {
     assert!(context.contains("impact_index"), "{context}");
 }
 
+/// Opening a pull request or merge request is the last moment the blast radius can go into
+/// the description, where a reviewer will see it.
+#[test]
+fn opening_a_pull_or_merge_request_gets_the_description_reminder() {
+    let state = tempfile::tempdir().unwrap();
+
+    for command in [
+        "gh pr create --title 'x' --body 'y'",
+        "gh -R owner/repo pr create --fill",
+        "glab mr create --fill",
+        "cd repo && glab mr create --title x",
+    ] {
+        let context = additional_context(&run_hook(&bash("session-a", command), state.path()));
+
+        assert!(
+            context.contains("impact_diff"),
+            "reminder should point at the diff's blast radius for `{command}`: {context}"
+        );
+        assert!(
+            context.contains("description"),
+            "reminder should ask for it in the description for `{command}`: {context}"
+        );
+    }
+}
+
+#[test]
+fn other_pull_request_commands_stay_quiet() {
+    let state = tempfile::tempdir().unwrap();
+
+    assert_silent(&run_hook(&bash("session-a", "gh pr view 12"), state.path()));
+    assert_silent(&run_hook(&bash("session-a", "glab mr list"), state.path()));
+    assert_silent(&run_hook(
+        &bash("session-a", "echo 'gh pr create'"),
+        state.path(),
+    ));
+}
+
 #[test]
 fn other_bash_commands_stay_quiet() {
     let state = tempfile::tempdir().unwrap();
