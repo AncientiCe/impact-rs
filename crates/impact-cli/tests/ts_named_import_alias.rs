@@ -50,14 +50,19 @@ fn query(cache_dir: &Path, file: &str) -> Value {
 fn named_import_renamed_at_the_import_site_still_resolves() {
     let cache_dir = tempfile::tempdir().unwrap();
     let stats = index(cache_dir.path());
-    assert_eq!(stats["files_indexed"], 4);
+    assert_eq!(stats["files_indexed"], 5);
 
     let report = query(cache_dir.path(), "printer.ts");
     let direct = report["direct"].as_array().unwrap();
     let paths: Vec<&str> = direct.iter().map(|d| d["path"].as_str().unwrap()).collect();
     assert_eq!(
         paths,
-        ["hook::useReceipt", "plain::plain", "preview::preview"]
+        [
+            "hook::useReceipt",
+            "legacy::legacy",
+            "plain::plain",
+            "preview::preview"
+        ]
     );
     assert!(direct.iter().all(|d| d["confidence"] == "Exact"));
 }

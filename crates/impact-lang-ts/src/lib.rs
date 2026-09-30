@@ -616,15 +616,31 @@ fn collect_require(
             "object_pattern" => {
                 let mut inner = pattern.walk();
                 for element in pattern.children(&mut inner) {
-                    let name = match element.kind() {
-                        "shorthand_property_identifier_pattern" => element.utf8_text(source).ok(),
-                        "pair_pattern" => element
-                            .child_by_field_name("value")
-                            .and_then(|v| v.utf8_text(source).ok()),
-                        _ => None,
-                    };
-                    if let Some(name) = name {
-                        scope.add_import(name, &module);
+                    match element.kind() {
+                        "shorthand_property_identifier_pattern" => {
+                            if let Ok(name) = element.utf8_text(source) {
+                                scope.add_import(name, &module);
+                            }
+                        }
+                        // `{ print: emit }` — `emit` is the local name, `print` what the
+                        // module exports.
+                        "pair_pattern" => {
+                            let original = element
+                                .child_by_field_name("key")
+                                .and_then(|k| k.utf8_text(source).ok());
+                            let local = element
+                                .child_by_field_name("value")
+                                .filter(|v| v.kind() == "identifier")
+                                .and_then(|v| v.utf8_text(source).ok());
+                            match (original, local) {
+                                (Some(original), Some(local)) => {
+                                    scope.add_aliased_import(local, original, &module)
+                                }
+                                (None, Some(local)) => scope.add_import(local, &module),
+                                _ => {}
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
