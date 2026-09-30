@@ -270,7 +270,10 @@ impl<'g> Resolver<'g> {
             // same-file declaration the file itself wrote) — so this ignores `r.to_name`
             // entirely and matches on `is_default_export` instead.
             RefTarget::ModuleDefault(module) => {
-                let ids = self.in_module_default(module);
+                let mut ids = self.in_module_default(module);
+                if ids.is_empty() {
+                    ids = self.in_module_via_reexports(module, "default", &mut Vec::new());
+                }
                 if ids.is_empty() {
                     return None;
                 }
@@ -379,7 +382,7 @@ impl<'g> Resolver<'g> {
         let matching: Vec<&Reexport> = candidates
             .iter()
             .map(|&i| &self.reexports.all[i])
-            .filter(|r| r.name == name || r.name == "*")
+            .filter(|r| r.name == name || (r.name == "*" && name != "default"))
             .collect();
         let barrel_is = |r: &Reexport, exact: bool| {
             let segments: Vec<&str> = r.barrel.iter().map(String::as_str).collect();
@@ -409,7 +412,7 @@ impl<'g> Resolver<'g> {
             } else {
                 self.in_module(&reexport.module, origin)
             };
-            if ids.is_empty() && origin != "default" {
+            if ids.is_empty() {
                 ids = self.in_module_via_reexports(&reexport.module, origin, seen);
             }
             for id in ids {

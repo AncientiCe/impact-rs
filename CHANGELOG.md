@@ -26,7 +26,10 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   followed, through chains of barrels, wherever the barrel sits; before, only a barrel beside
   its origin resolved, and only for named re-exports. The barrel's module scope also gets an
   edge to each named symbol it re-exports. Renamed re-exports (`export { a as b } from`,
-  `export { default as b } from`) are followed back to the original name.
+  `export { default as b } from`) are followed back to the original name, and a default
+  import of a barrel (`import X from './lib'`) reaches whatever the barrel passes through as
+  its default (`export { default } from`, `export { a as default } from`), wherever the barrel
+  sits. `export *` does not carry a default, as in the language.
 
 ## [0.11.10] - 2026-09-29
 

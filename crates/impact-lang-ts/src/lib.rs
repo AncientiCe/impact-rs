@@ -510,8 +510,8 @@ fn module_imports(
 ///
 /// A renamed specifier (`export { a as b } from`) is reported as `a as b`, since the ref
 /// carries one name and the linker needs both: the barrel's `b` is what a caller writes,
-/// `a` is what `./x` exports. A bare `default` is left out: it isn't a name anything is
-/// looked up by.
+/// `a` is what `./x` exports. A bare `default` is reported as `default`: a default import
+/// of the barrel is resolved through it (`export *` never carries a default).
 fn reexported_names(statement: Node, source: &[u8]) -> Vec<String> {
     let mut names = Vec::new();
     let mut cursor = statement.walk();
@@ -529,8 +529,7 @@ fn reexported_names(statement: Node, source: &[u8]) -> Vec<String> {
                     };
                     match field_text(specifier, "alias", source) {
                         Some(alias) => names.push(format!("{name} as {alias}")),
-                        None if name != "default" => names.push(name.to_string()),
-                        None => {}
+                        None => names.push(name.to_string()),
                     }
                 }
             }
