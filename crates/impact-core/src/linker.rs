@@ -67,6 +67,9 @@ struct Reexport {
     barrel: Vec<String>,
     /// The name the barrel exports, or `*` for every name `module` exports.
     name: String,
+    /// What `module` calls it: the same as `name` unless the barrel renames it, `None` for
+    /// `*` (whatever was asked for). `default` means the module's default export.
+    origin: Option<String>,
     /// The module the name is re-exported from.
     module: String,
 }
@@ -75,8 +78,8 @@ struct Reexport {
 /// barrel's path so an import's lookup only scans barrels that could be its target.
 ///
 /// An adapter reports a re-export as an `Imports` reference from the barrel's module scope
-/// whose `to_name` is the re-exported name (`*` for a star export) rather than
-/// `MODULE_SCOPE`; the ordinary import reference every file gets is the one that names the
+/// whose `to_name` is the re-exported name (`*` for a star export, `origin as exported`
+/// for a renamed one) rather than `MODULE_SCOPE`; the ordinary import reference every file gets is the one that names the
 /// module scope itself.
 #[derive(Debug, Default)]
 struct Reexports {
@@ -114,9 +117,15 @@ impl Reexports {
                     .or_default()
                     .push(index);
             }
+            let (name, origin) = match r.to_name.split_once(" as ") {
+                Some((origin, exported)) => (exported, Some(origin)),
+                None if r.to_name == "*" => ("*", None),
+                None => (r.to_name.as_str(), Some(r.to_name.as_str())),
+            };
             found.all.push(Reexport {
                 barrel,
-                name: r.to_name.clone(),
+                name: name.to_string(),
+                origin: origin.map(str::to_string),
                 module: module.clone(),
             });
         }
@@ -394,9 +403,14 @@ impl<'g> Resolver<'g> {
 
         let mut found = Vec::new();
         for reexport in barrels {
-            let mut ids = self.in_module(&reexport.module, name);
-            if ids.is_empty() {
-                ids = self.in_module_via_reexports(&reexport.module, name, seen);
+            let origin = reexport.origin.as_deref().unwrap_or(name);
+            let mut ids = if origin == "default" {
+                self.in_module_default(&reexport.module)
+            } else {
+                self.in_module(&reexport.module, origin)
+            };
+            if ids.is_empty() && origin != "default" {
+                ids = self.in_module_via_reexports(&reexport.module, origin, seen);
             }
             for id in ids {
                 if !found.contains(&id) {

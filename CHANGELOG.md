@@ -25,8 +25,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   barrel re-exports. `export { a } from`, `export * from` and `export * as ns from` are
   followed, through chains of barrels, wherever the barrel sits; before, only a barrel beside
   its origin resolved, and only for named re-exports. The barrel's module scope also gets an
-  edge to each named symbol it re-exports. A renamed re-export (`export { a as b } from`) is
-  still not followed.
+  edge to each named symbol it re-exports. Renamed re-exports (`export { a as b } from`,
+  `export { default as b } from`) are followed back to the original name.
 
 ## [0.11.10] - 2026-09-29
 

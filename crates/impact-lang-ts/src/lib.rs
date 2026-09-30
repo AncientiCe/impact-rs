@@ -508,9 +508,10 @@ fn module_imports(
 /// written `ns.print()` names `print`, which `./x` exports, so the namespace form is the
 /// same pass-through as far as a caller is concerned).
 ///
-/// A renamed specifier (`export { a as b } from`) is left out: the ref carries one name,
-/// and the barrel's `b` can't be told apart from a `b` that `./x` really exports.
-/// `default` is left out too, since it isn't a name anything is looked up by.
+/// A renamed specifier (`export { a as b } from`) is reported as `a as b`, since the ref
+/// carries one name and the linker needs both: the barrel's `b` is what a caller writes,
+/// `a` is what `./x` exports. A bare `default` is left out: it isn't a name anything is
+/// looked up by.
 fn reexported_names(statement: Node, source: &[u8]) -> Vec<String> {
     let mut names = Vec::new();
     let mut cursor = statement.walk();
@@ -520,15 +521,16 @@ fn reexported_names(statement: Node, source: &[u8]) -> Vec<String> {
             "export_clause" => {
                 let mut inner = child.walk();
                 for specifier in child.children(&mut inner) {
-                    if specifier.kind() != "export_specifier"
-                        || specifier.child_by_field_name("alias").is_some()
-                    {
+                    if specifier.kind() != "export_specifier" {
                         continue;
                     }
-                    if let Some(name) = field_text(specifier, "name", source) {
-                        if name != "default" {
-                            names.push(name.to_string());
-                        }
+                    let Some(name) = field_text(specifier, "name", source) else {
+                        continue;
+                    };
+                    match field_text(specifier, "alias", source) {
+                        Some(alias) => names.push(format!("{name} as {alias}")),
+                        None if name != "default" => names.push(name.to_string()),
+                        None => {}
                     }
                 }
             }
