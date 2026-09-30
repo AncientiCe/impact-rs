@@ -21,6 +21,11 @@ pub struct FileAst {
 /// `EdgeKind::Imports` reference from each importing file's own module scope to it, so
 /// every file whose loading runs that code is reachable as a dependent of it.
 ///
+/// A barrel that re-exports names from another module (`export { a } from`, `export *
+/// from`) additionally emits an `Imports` reference from its own module scope whose
+/// `to_name` is that name (`*` for all of them), which is how the linker follows an import
+/// of the barrel through to the symbol (see `Reexports` in `linker`).
+///
 /// Angle brackets because no language this project reads allows them in an identifier:
 /// no call site's name can ever resolve here by accident.
 pub const MODULE_SCOPE: &str = "<module>";

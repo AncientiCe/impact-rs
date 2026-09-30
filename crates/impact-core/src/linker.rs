@@ -55,16 +55,87 @@ pub struct Resolver<'g> {
     /// time. Keying by segment narrows that scan to the files whose path shares the
     /// import's last segment.
     module_scopes_by_segment: HashMap<&'g str, Vec<(Vec<&'g str>, NodeId)>>,
+    /// Re-exports the adapter reported (see `Reexports`) — consulted by `resolve_ref` when
+    /// an imported module holds no symbol of the requested name itself.
+    reexports: std::rc::Rc<Reexports>,
+}
+
+/// One `export { name } from './origin'` / `export * from './origin'` in a barrel file.
+#[derive(Debug)]
+struct Reexport {
+    /// The barrel's own module path, without the trailing `<module>`.
+    barrel: Vec<String>,
+    /// The name the barrel exports, or `*` for every name `module` exports.
+    name: String,
+    /// The module the name is re-exported from.
+    module: String,
+}
+
+/// The re-exports found among a project's references, indexed by each segment of the
+/// barrel's path so an import's lookup only scans barrels that could be its target.
+///
+/// An adapter reports a re-export as an `Imports` reference from the barrel's module scope
+/// whose `to_name` is the re-exported name (`*` for a star export) rather than
+/// `MODULE_SCOPE`; the ordinary import reference every file gets is the one that names the
+/// module scope itself.
+#[derive(Debug, Default)]
+struct Reexports {
+    all: Vec<Reexport>,
+    by_segment: HashMap<String, Vec<usize>>,
+}
+
+impl Reexports {
+    fn from_refs(refs: &[RefDecl]) -> Self {
+        let mut found = Self::default();
+        for r in refs {
+            let RefTarget::Module(module) = &r.to_target else {
+                continue;
+            };
+            if r.kind != EdgeKind::Imports || r.to_name == MODULE_SCOPE {
+                continue;
+            }
+            let Some(owner) = r
+                .from_qualified_path
+                .strip_suffix(MODULE_SCOPE)
+                .map(|p| p.trim_end_matches("::"))
+            else {
+                continue;
+            };
+            let barrel: Vec<String> = owner
+                .split("::")
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+            let index = found.all.len();
+            for segment in &barrel {
+                found
+                    .by_segment
+                    .entry(segment.clone())
+                    .or_default()
+                    .push(index);
+            }
+            found.all.push(Reexport {
+                barrel,
+                name: r.to_name.clone(),
+                module: module.clone(),
+            });
+        }
+        found
+    }
 }
 
 impl<'g> Resolver<'g> {
     pub fn build(graph: &'g SymbolGraph) -> Self {
-        Self::build_where(graph, |_| true)
+        Self::build_where(graph, Default::default(), |_| true)
     }
 
     /// A resolver over only the nodes `keep` admits — see `link`, which uses this to keep
     /// a call site from resolving into a different language than the one it was written in.
-    fn build_where(graph: &'g SymbolGraph, keep: impl Fn(&Node) -> bool) -> Self {
+    fn build_where(
+        graph: &'g SymbolGraph,
+        reexports: std::rc::Rc<Reexports>,
+        keep: impl Fn(&Node) -> bool,
+    ) -> Self {
         let mut by_qualified_path = HashMap::new();
         let mut by_last_two_segments: HashMap<String, Vec<NodeId>> = HashMap::new();
         let mut by_short_name: HashMap<&str, Vec<(&str, NodeId)>> = HashMap::new();
@@ -124,6 +195,7 @@ impl<'g> Resolver<'g> {
             abstract_,
             default_exports,
             module_scopes_by_segment,
+            reexports,
         }
     }
 
@@ -167,7 +239,10 @@ impl<'g> Resolver<'g> {
             // information than the name itself — resolve it structurally.
             RefTarget::Module(module) if module.is_empty() => self.resolve(&r.to_name),
             RefTarget::Module(module) => {
-                let ids = self.in_module(module, &r.to_name);
+                let mut ids = self.in_module(module, &r.to_name);
+                if ids.is_empty() && r.to_name != MODULE_SCOPE {
+                    ids = self.in_module_via_reexports(module, &r.to_name, &mut Vec::new());
+                }
                 if ids.is_empty() {
                     // The import resolved somewhere outside this project (a dependency, a
                     // standard-library module). Dropping the edge is right: inventing a
@@ -264,6 +339,72 @@ impl<'g> Resolver<'g> {
             return non_generated;
         }
         matched
+    }
+
+    /// `in_module`'s answer when `module` is a barrel: the symbols `name` resolves to
+    /// through the `export { name } from` / `export * from` statements of the file an
+    /// import of `module` loads, followed through barrels of barrels. `seen` holds the
+    /// `(module, name)` pairs already followed, which is what ends a cycle of barrels.
+    fn in_module_via_reexports(
+        &self,
+        module: &str,
+        name: &str,
+        seen: &mut Vec<(String, String)>,
+    ) -> Vec<NodeId> {
+        let wanted: Vec<&str> = module.split("::").filter(|s| !s.is_empty()).collect();
+        let Some(candidates) = wanted
+            .last()
+            .and_then(|last| self.reexports.by_segment.get(*last))
+        else {
+            return Vec::new();
+        };
+        let key = (module.to_string(), name.to_string());
+        if seen.contains(&key) {
+            return Vec::new();
+        }
+        seen.push(key);
+
+        // A barrel indexed under exactly `module` is the one the import loads; failing
+        // that, the same segment containment `module_scope` uses (`./lib` meaning
+        // `lib/index.ts`).
+        let matching: Vec<&Reexport> = candidates
+            .iter()
+            .map(|&i| &self.reexports.all[i])
+            .filter(|r| r.name == name || r.name == "*")
+            .collect();
+        let barrel_is = |r: &Reexport, exact: bool| {
+            let segments: Vec<&str> = r.barrel.iter().map(String::as_str).collect();
+            if exact {
+                segments == wanted
+            } else {
+                contains_run(&segments, &wanted)
+            }
+        };
+        let barrels: Vec<&Reexport> = if matching.iter().any(|r| barrel_is(r, true)) {
+            matching
+                .into_iter()
+                .filter(|r| barrel_is(r, true))
+                .collect()
+        } else {
+            matching
+                .into_iter()
+                .filter(|r| barrel_is(r, false))
+                .collect()
+        };
+
+        let mut found = Vec::new();
+        for reexport in barrels {
+            let mut ids = self.in_module(&reexport.module, name);
+            if ids.is_empty() {
+                ids = self.in_module_via_reexports(&reexport.module, name, seen);
+            }
+            for id in ids {
+                if !found.contains(&id) {
+                    found.push(id);
+                }
+            }
+        }
+        found
     }
 
     /// The module scope an import of `module` loads — `in_module`'s answer for the name
@@ -550,6 +691,7 @@ pub fn link(
     packages: &[(String, PackageDecl)],
 ) -> Vec<Edge> {
     let resolver = Resolver::build(graph);
+    let reexports = std::rc::Rc::new(Reexports::from_refs(refs));
     let packages = Packages::new(packages);
     let owners: HashMap<&NodeId, (&str, Option<usize>)> = graph
         .nodes()
@@ -591,7 +733,7 @@ pub fn link(
                             &packages.visible[p]
                         }
                     });
-                    Resolver::build_where(graph, |n| {
+                    Resolver::build_where(graph, reexports.clone(), |n| {
                         if matches!(n.kind, NodeKind::Contract(_)) {
                             return true;
                         }

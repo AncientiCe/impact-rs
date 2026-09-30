@@ -21,6 +21,12 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   its exported name, and the calls inside it are attributed to it. Before, they were
   attributed to the file's `<module>` scope, so the blast radius named the file, not the
   function.
+- TypeScript: a caller that imports through a barrel file is now linked to the symbol the
+  barrel re-exports. `export { a } from`, `export * from` and `export * as ns from` are
+  followed, through chains of barrels, wherever the barrel sits; before, only a barrel beside
+  its origin resolved, and only for named re-exports. The barrel's module scope also gets an
+  edge to each named symbol it re-exports. A renamed re-export (`export { a as b } from`) is
+  still not followed.
 
 ## [0.11.10] - 2026-09-29
 

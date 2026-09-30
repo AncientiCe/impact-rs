@@ -483,6 +483,16 @@ fn module_imports(
         else {
             continue;
         };
+        if statement.kind() == "export_statement" {
+            for name in reexported_names(statement, source) {
+                out.push(RefDecl {
+                    from_qualified_path: from.clone(),
+                    to_name: name,
+                    kind: EdgeKind::Imports,
+                    to_target: RefTarget::Module(module.clone()),
+                });
+            }
+        }
         out.push(RefDecl {
             from_qualified_path: from.clone(),
             to_name: MODULE_SCOPE.to_string(),
@@ -491,6 +501,41 @@ fn module_imports(
         });
     }
     out
+}
+
+/// The names an `export ... from './x'` statement passes through from `./x`: each name in
+/// `export { a, b } from`, or `*` for `export * from` and `export * as ns from` (a call
+/// written `ns.print()` names `print`, which `./x` exports, so the namespace form is the
+/// same pass-through as far as a caller is concerned).
+///
+/// A renamed specifier (`export { a as b } from`) is left out: the ref carries one name,
+/// and the barrel's `b` can't be told apart from a `b` that `./x` really exports.
+/// `default` is left out too, since it isn't a name anything is looked up by.
+fn reexported_names(statement: Node, source: &[u8]) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut cursor = statement.walk();
+    for child in statement.children(&mut cursor) {
+        match child.kind() {
+            "*" | "namespace_export" => names.push("*".to_string()),
+            "export_clause" => {
+                let mut inner = child.walk();
+                for specifier in child.children(&mut inner) {
+                    if specifier.kind() != "export_specifier"
+                        || specifier.child_by_field_name("alias").is_some()
+                    {
+                        continue;
+                    }
+                    if let Some(name) = field_text(specifier, "name", source) {
+                        if name != "default" {
+                            names.push(name.to_string());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    names
 }
 
 /// Records every name an `import`/`export ... from` statement binds, against the module
