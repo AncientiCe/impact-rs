@@ -11,8 +11,11 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   ([#11](https://github.com/AncientiCe/impact-rs/issues/11)). The call was recorded under the
   alias, which the target module has no symbol for, so the aliased caller and everything that
   reaches the function through it were missing from `impact_file`/`impact_change`. Named
-  imports, CommonJS `const { a: b } = require('./x')`, `export { a as b } from`, and value references (JSX tags and attributes, call
-  arguments, array elements, object values) all resolve to the exported name now.
+  imports, CommonJS `const { a: b } = require('./x')`, `export { a as b } from`, and value
+  references (JSX tags and attributes, call arguments, array elements, object values) all
+  resolve to the exported name now.
+- TypeScript: `import { default as run } from './x'` now resolves through the module's default
+  export, like `import run from './x'`, instead of looking for a symbol named `run`.
 
 ## [0.11.10] - 2026-09-29
 

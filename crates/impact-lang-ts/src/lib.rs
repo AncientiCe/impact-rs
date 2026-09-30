@@ -576,6 +576,10 @@ fn bind_named_imports(list: Node, source: &[u8], module: &str, scope: &mut FileS
             .child_by_field_name("alias")
             .and_then(|n| n.utf8_text(source).ok());
         match (name, alias) {
+            // `import { default as run }` is a default import spelled as a named one.
+            (Some("default"), Some(local)) if child.kind() == "import_specifier" => {
+                scope.add_default_import(local, module)
+            }
             (Some(original), Some(local)) => scope.add_aliased_import(local, original, module),
             (Some(name), None) => scope.add_import(name, module),
             _ => {}
