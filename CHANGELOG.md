@@ -16,6 +16,11 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   resolve to the exported name now.
 - TypeScript: `import { default as run } from './x'` now resolves through the module's default
   export, like `import run from './x'`, instead of looking for a symbol named `run`.
+- TypeScript/JavaScript: a function a CommonJS module exports by assignment
+  (`exports.name = function () {}`, `module.exports.name = () => ...`) is now indexed under
+  its exported name, and the calls inside it are attributed to it. Before, they were
+  attributed to the file's `<module>` scope, so the blast radius named the file, not the
+  function.
 
 ## [0.11.10] - 2026-09-29
 

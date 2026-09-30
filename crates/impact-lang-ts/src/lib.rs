@@ -855,6 +855,18 @@ fn walk(node: Node, source: &[u8], prefix: &str, is_test_file: bool, out: &mut V
                 push_fn_valued_declarators(child, source, prefix, is_test_file, out);
                 push_call_valued_declarators(child, source, prefix, is_test_file, out);
             }
+            "expression_statement" => {
+                if let Some((name, function)) = exports_assigned_function(child, source) {
+                    push(
+                        out,
+                        NodeKind::Function,
+                        prefix,
+                        name,
+                        function,
+                        is_test_file,
+                    );
+                }
+            }
             _ if is_test_file => {
                 walk_test_blocks(child, source, prefix, out);
                 continue;
@@ -890,6 +902,44 @@ fn walk_test_blocks(node: Node, source: &[u8], prefix: &str, out: &mut Vec<Symbo
     for child in node.children(&mut cursor) {
         walk_test_blocks(child, source, prefix, out);
     }
+}
+
+/// `exports.name = function () {}` / `module.exports.name = () => ...` — how a CommonJS
+/// module names a function it exports, which is a statement rather than a declaration.
+/// Returns the exported name (the property, which is what importers write, not the function
+/// expression's own optional name) and the function node.
+///
+/// Only a top-level statement qualifies, and only when the target is `exports.<name>` or
+/// `module.exports.<name>` — any other assignment (`this.handler = ...`, `obj.x = ...`) has
+/// an owner this adapter can't name.
+fn exports_assigned_function<'a>(
+    statement: Node<'a>,
+    source: &'a [u8],
+) -> Option<(&'a str, Node<'a>)> {
+    let assignment = statement
+        .named_child(0)
+        .filter(|n| n.kind() == "assignment_expression")?;
+    let function = assignment.child_by_field_name("right").filter(|v| {
+        matches!(
+            v.kind(),
+            "arrow_function" | "function_expression" | "generator_function"
+        )
+    })?;
+    let target = assignment
+        .child_by_field_name("left")
+        .filter(|l| l.kind() == "member_expression")?;
+    let owner = target
+        .child_by_field_name("object")?
+        .utf8_text(source)
+        .ok()?;
+    if owner != "exports" && owner != "module.exports" {
+        return None;
+    }
+    let name = target
+        .child_by_field_name("property")?
+        .utf8_text(source)
+        .ok()?;
+    Some((name, function))
 }
 
 /// A `const`/`let`/`var` declaration's `variable_declarator` children whose value is an
@@ -1138,6 +1188,22 @@ fn collect_refs(
                             out,
                         );
                     }
+                }
+            }
+            "expression_statement" => {
+                if let Some((name, function)) = exports_assigned_function(child, source) {
+                    let qualified = join_path(prefix, name);
+                    collect_refs(
+                        function,
+                        source,
+                        prefix,
+                        Some(&qualified),
+                        is_test_file,
+                        scope,
+                        out,
+                    );
+                } else {
+                    collect_refs(child, source, prefix, current_fn, is_test_file, scope, out);
                 }
             }
             "lexical_declaration" | "variable_declaration" => {
