@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.11.11] - 2026-09-30
+
 ### Fixed
 
 - TypeScript: a function imported under a local alias (`import { print as render } from
