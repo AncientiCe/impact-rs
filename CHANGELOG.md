@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.11.12] - 2026-10-11
+
 ### Fixed
 
 - MCP: `impact_file`, `impact_change` and `impact_diff` now require `project_path`, like
