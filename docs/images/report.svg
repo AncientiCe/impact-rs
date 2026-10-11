@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 476" width="880" height="476" role="img" aria-labelledby="title desc">
+  <title id="title">impact query output</title>
+  <desc id="desc">A terminal running "impact query src/repo.rs". The report lists one DIRECT caller, handlers::PaymentHandler::create_payment_route at src/handlers.rs line 6; one INDIRECT caller, e2e_tests::creates_payment_route_end_to_end at src/e2e_tests.rs line 4; the API route POST /payments; the event PaymentCreated; the database table payments; and 1 affected test.</desc>
+  <style>
+    text { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 16px; white-space: pre; }
+    .fg { fill: #e6edf3; }
+    .dim { fill: #7d8590; }
+    .prompt { fill: #3fb950; }
+    .h { font-weight: 700; }
+    .direct { fill: #f85149; }
+    .indirect { fill: #db6d28; }
+    .api { fill: #4493f8; }
+    .events { fill: #a371f7; }
+    .db { fill: #39c5cf; }
+    .tests { fill: #3fb950; }
+  </style>
+
+  <rect width="880" height="476" rx="12" fill="#0d1117"/>
+  <rect width="880" height="476" rx="12" fill="none" stroke="#30363d"/>
+  <path d="M0 12 A12 12 0 0 1 12 0 H868 A12 12 0 0 1 880 12 V38 H0 Z" fill="#161b22"/>
+  <line x1="0" y1="38" x2="880" y2="38" stroke="#30363d"/>
+  <circle cx="22" cy="19" r="6" fill="#ff5f57"/>
+  <circle cx="42" cy="19" r="6" fill="#febc2e"/>
+  <circle cx="62" cy="19" r="6" fill="#28c840"/>
+  <text class="dim" x="440" y="24" text-anchor="middle" font-size="13">impact — ~/payments</text>
+
+  <text x="24" y="72"><tspan class="prompt">$</tspan><tspan class="fg"> impact query src/repo.rs</tspan></text>
+
+  <text class="direct h" x="24" y="110">DIRECT</text>
+  <text x="24" y="134"><tspan class="fg">  handlers::PaymentHandler::create_payment_route</tspan><tspan class="dim">  src/handlers.rs:6</tspan></text>
+  <text class="indirect h" x="24" y="162">INDIRECT</text>
+  <text x="24" y="186"><tspan class="fg">  e2e_tests::creates_payment_route_end_to_end</tspan><tspan class="dim">  src/e2e_tests.rs:4</tspan></text>
+  <text class="api h" x="24" y="214">API</text>
+  <text class="fg" x="24" y="238">  POST /payments</text>
+  <text class="events h" x="24" y="266">EVENTS</text>
+  <text class="fg" x="24" y="290">  PaymentCreated</text>
+  <text class="db h" x="24" y="318">DATABASE</text>
+  <text class="fg" x="24" y="342">  payments</text>
+  <text class="tests h" x="24" y="370">TESTS</text>
+  <text class="fg" x="24" y="394">  1 affected tests</text>
+  <text x="24" y="418"><tspan class="fg">  e2e_tests::creates_payment_route_end_to_end</tspan><tspan class="dim">  src/e2e_tests.rs:4</tspan></text>
+  <text x="24" y="452"><tspan class="prompt">$</tspan><tspan class="fg"> </tspan></text>
+  <rect x="44" y="438" width="10" height="18" fill="#e6edf3" opacity="0.8"/>
+</svg>

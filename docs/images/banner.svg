@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 320" width="1280" height="320" role="img" aria-labelledby="title desc">
+  <title id="title">impact</title>
+  <desc id="desc">impact banner: a changed file sends ripples out to its direct callers, then its indirect callers, and finally to the API route, event, database table and tests they touch. Tagline: what you're about to break, before you break it.</desc>
+  <style>
+    .bg { fill: #f6f8fa; }
+    .ink { fill: #1f2328; }
+    .muted { fill: #57606a; }
+    .line { stroke: #8c959f; }
+    .chip { fill: #ffffff; stroke: #d0d7de; }
+    .change { fill: #bf8700; }
+    .ripple { stroke: #bf8700; }
+    .direct { fill: #cf222e; }
+    .indirect { fill: #bc4c00; }
+    .kind { fill: #0969da; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      .ink { fill: #e6edf3; }
+      .muted { fill: #9198a1; }
+      .line { stroke: #6e7681; }
+      .chip { fill: #161b22; stroke: #30363d; }
+      .change { fill: #d29922; }
+      .ripple { stroke: #d29922; }
+      .direct { fill: #f85149; }
+      .indirect { fill: #db6d28; }
+      .kind { fill: #4493f8; }
+    }
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+    .label { font-size: 13px; letter-spacing: 0.12em; font-weight: 600; }
+  </style>
+
+  <rect class="bg" width="1280" height="320" rx="16"/>
+
+  <!-- Left: name and tagline -->
+  <text class="ink" x="64" y="132" font-size="76" font-weight="700">impact</text>
+  <text class="ink" x="66" y="182" font-size="26">What you're about to break,</text>
+  <text class="ink" x="66" y="216" font-size="26">before you break it.</text>
+  <g transform="translate(64 240)">
+    <rect class="chip" width="318" height="44" rx="10" stroke-width="1.5"/>
+    <text class="mono" x="18" y="28" font-size="16"><tspan class="muted">$</tspan><tspan class="ink"> impact query src/repo.rs</tspan></text>
+  </g>
+
+  <!-- Column labels -->
+  <text class="muted label" x="636" y="44" text-anchor="middle">CHANGE</text>
+  <text class="muted label" x="790" y="44" text-anchor="middle">DIRECT</text>
+  <text class="muted label" x="905" y="44" text-anchor="middle">INDIRECT</text>
+  <text class="muted label" x="1105" y="44" text-anchor="middle">REACHES</text>
+
+  <!-- Ripples around the change -->
+  <g class="ripple" fill="none" stroke-width="2">
+    <circle cx="636" cy="160" r="96" opacity="0.12"/>
+    <circle cx="636" cy="160" r="80" opacity="0.22"/>
+    <circle cx="636" cy="160" r="64" opacity="0.35"/>
+  </g>
+
+  <!-- Edges -->
+  <g class="line" stroke-width="2" fill="none" stroke-linecap="round">
+    <path d="M711 160 C 750 160, 752 110, 781 110"/>
+    <path d="M711 160 C 750 160, 752 210, 781 210"/>
+    <path d="M799 110 C 850 110, 860 80, 898 80"/>
+    <path d="M799 110 C 850 110, 860 160, 898 160"/>
+    <path d="M799 210 C 850 210, 860 240, 898 240"/>
+    <path d="M912 80 C 950 80, 960 70, 990 70"/>
+    <path d="M912 160 C 950 160, 960 130, 990 130"/>
+    <path d="M912 160 C 950 160, 960 190, 990 190"/>
+    <path d="M912 240 C 950 240, 960 250, 990 250"/>
+  </g>
+
+  <!-- Changed file -->
+  <g transform="translate(561 138)">
+    <rect class="chip" width="150" height="44" rx="10" stroke-width="1.5"/>
+    <circle class="change" cx="22" cy="22" r="7"/>
+    <text class="ink mono" x="38" y="28" font-size="17">repo.rs</text>
+  </g>
+
+  <!-- Direct and indirect callers -->
+  <circle class="direct" cx="790" cy="110" r="9"/>
+  <circle class="direct" cx="790" cy="210" r="9"/>
+  <circle class="indirect" cx="905" cy="80" r="7"/>
+  <circle class="indirect" cx="905" cy="160" r="7"/>
+  <circle class="indirect" cx="905" cy="240" r="7"/>
+
+  <!-- What it reaches -->
+  <g transform="translate(990 50)">
+    <rect class="chip" width="230" height="40" rx="10" stroke-width="1.5"/>
+    <text class="kind mono" x="14" y="26" font-size="13" font-weight="700">API</text>
+    <text class="ink mono" x="74" y="26" font-size="15">POST /payments</text>
+  </g>
+  <g transform="translate(990 110)">
+    <rect class="chip" width="230" height="40" rx="10" stroke-width="1.5"/>
+    <text class="kind mono" x="14" y="26" font-size="13" font-weight="700">EVENT</text>
+    <text class="ink mono" x="74" y="26" font-size="15">PaymentCreated</text>
+  </g>
+  <g transform="translate(990 170)">
+    <rect class="chip" width="230" height="40" rx="10" stroke-width="1.5"/>
+    <text class="kind mono" x="14" y="26" font-size="13" font-weight="700">TABLE</text>
+    <text class="ink mono" x="74" y="26" font-size="15">payments</text>
+  </g>
+  <g transform="translate(990 230)">
+    <rect class="chip" width="230" height="40" rx="10" stroke-width="1.5"/>
+    <text class="kind mono" x="14" y="26" font-size="13" font-weight="700">TESTS</text>
+    <text class="ink mono" x="74" y="26" font-size="15">1 affected</text>
+  </g>
+</svg>

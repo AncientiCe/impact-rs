@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-labelledby="title desc">
+  <title id="title">impact social preview</title>
+  <desc id="desc">impact: what you're about to break, before you break it. Deterministic blast radius for Rust, TypeScript, JavaScript, Python, Go, Kotlin, Swift and C++. Works with Claude Code, Codex and Cursor.</desc>
+  <defs>
+    <radialGradient id="glow" cx="0.68" cy="0.55" r="0.55">
+      <stop offset="0" stop-color="#d29922" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#0d1117" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <style>
+    text { font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif; }
+    .mono { font-family: Consolas, ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .label { font-size: 13px; letter-spacing: 0.12em; font-weight: 600; fill: #9198a1; }
+  </style>
+
+  <rect width="1280" height="640" fill="#0d1117"/>
+  <rect width="1280" height="640" fill="url(#glow)"/>
+
+  <!-- Text column -->
+  <text x="88" y="214" font-size="112" font-weight="700" fill="#e6edf3">impact</text>
+  <text x="92" y="282" font-size="34" fill="#e6edf3">What you're about to break,</text>
+  <text x="92" y="326" font-size="34" fill="#e6edf3">before you break it.</text>
+  <text x="92" y="404" font-size="21" fill="#9198a1">Blast radius for people and AI agents.</text>
+  <text x="92" y="440" font-size="21" fill="#9198a1">Rust · TS/JS · Python · Go · Kotlin · Swift · C++</text>
+  <text x="92" y="548" font-size="20" fill="#9198a1" class="mono">github.com/AncientiCe/impact-rs</text>
+
+  <!-- Blast graph (same geometry as the README banner) -->
+  <g transform="translate(20 170)">
+    <text class="label" x="636" y="44" text-anchor="middle">CHANGE</text>
+    <text class="label" x="790" y="44" text-anchor="middle">DIRECT</text>
+    <text class="label" x="905" y="44" text-anchor="middle">INDIRECT</text>
+    <text class="label" x="1105" y="44" text-anchor="middle">REACHES</text>
+
+    <g stroke="#d29922" fill="none" stroke-width="2">
+      <circle cx="636" cy="160" r="96" opacity="0.12"/>
+      <circle cx="636" cy="160" r="80" opacity="0.22"/>
+      <circle cx="636" cy="160" r="64" opacity="0.35"/>
+    </g>
+
+    <g stroke="#6e7681" stroke-width="2" fill="none" stroke-linecap="round">
+      <path d="M711 160 C 750 160, 752 110, 781 110"/>
+      <path d="M711 160 C 750 160, 752 210, 781 210"/>
+      <path d="M799 110 C 850 110, 860 80, 898 80"/>
+      <path d="M799 110 C 850 110, 860 160, 898 160"/>
+      <path d="M799 210 C 850 210, 860 240, 898 240"/>
+      <path d="M912 80 C 950 80, 960 70, 990 70"/>
+      <path d="M912 160 C 950 160, 960 130, 990 130"/>
+      <path d="M912 160 C 950 160, 960 190, 990 190"/>
+      <path d="M912 240 C 950 240, 960 250, 990 250"/>
+    </g>
+
+    <g transform="translate(561 138)">
+      <rect width="150" height="44" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+      <circle cx="22" cy="22" r="7" fill="#d29922"/>
+      <text class="mono" x="38" y="28" font-size="17" fill="#e6edf3">repo.rs</text>
+    </g>
+
+    <circle cx="790" cy="110" r="9" fill="#f85149"/>
+    <circle cx="790" cy="210" r="9" fill="#f85149"/>
+    <circle cx="905" cy="80" r="7" fill="#db6d28"/>
+    <circle cx="905" cy="160" r="7" fill="#db6d28"/>
+    <circle cx="905" cy="240" r="7" fill="#db6d28"/>
+
+    <g class="mono">
+      <g transform="translate(990 50)">
+        <rect width="230" height="40" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+        <text class="mono" x="14" y="26" font-size="13" font-weight="700" fill="#4493f8">API</text>
+        <text class="mono" x="74" y="26" font-size="15" fill="#e6edf3">POST /payments</text>
+      </g>
+      <g transform="translate(990 110)">
+        <rect width="230" height="40" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+        <text class="mono" x="14" y="26" font-size="13" font-weight="700" fill="#4493f8">EVENT</text>
+        <text class="mono" x="74" y="26" font-size="15" fill="#e6edf3">PaymentCreated</text>
+      </g>
+      <g transform="translate(990 170)">
+        <rect width="230" height="40" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+        <text class="mono" x="14" y="26" font-size="13" font-weight="700" fill="#4493f8">TABLE</text>
+        <text class="mono" x="74" y="26" font-size="15" fill="#e6edf3">payments</text>
+      </g>
+      <g transform="translate(990 230)">
+        <rect width="230" height="40" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+        <text class="mono" x="14" y="26" font-size="13" font-weight="700" fill="#4493f8">TESTS</text>
+        <text class="mono" x="74" y="26" font-size="15" fill="#e6edf3">1 affected</text>
+      </g>
+    </g>
+  </g>
+</svg>

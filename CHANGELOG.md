@@ -13,6 +13,10 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   and a troubleshooting table. It also fixes two stale claims: TypeScript/JavaScript do
   detect tests (by `*.test.*`/`*.spec.*`/`__tests__/` file name), and API route detection is
   not Rust/Go-only (Python and TypeScript detect FastAPI/Flask and Express/Fastify routes).
+- README visuals: a light/dark-aware banner (`docs/images/banner.svg`), a rendered report
+  (`docs/images/report.svg`), mermaid diagrams of the agent loop, indexing pipeline and
+  cross-project matching, a FAQ, and a social preview image
+  (`docs/images/social-preview.png`, from `social-preview.svg`) for the GitHub repo card.
 
 ## [0.11.13] - 2026-10-11
 
