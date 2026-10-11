@@ -4,6 +4,18 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP: `impact_file`, `impact_change` and `impact_diff` now require `project_path`, like
+  `impact_index`, and reject a call without it with `project_path is required`
+  ([#12](https://github.com/AncientiCe/impact-rs/issues/12)). They used to fall back to the
+  server's working directory, which MCP clients often set to `/`, so the call failed with
+  `creating cache directory /.impact`, an error that looks like a disk permission problem.
+- Querying a project that was never indexed (`impact query`/`change`/`diff`, or the MCP
+  tools) now fails with "has not been indexed — run `impact index` first". It used to create
+  an empty `.impact/cache.sqlite` in the project and report no dependents, which reads as
+  "nothing depends on this".
+
 ## [0.11.11] - 2026-09-30
 
 ### Fixed

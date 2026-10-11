@@ -210,14 +210,14 @@ fn tool_list() -> Value {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "File to compute the blast radius for, relative to project_path or absolute"},
-                    "project_path": {"type": "string", "description": "Project root the cache was built against (defaults to the current directory)"},
+                    "project_path": {"type": "string", "description": "Project root the cache was built against (the same path passed to impact_index)"},
                     "cache_dir": {"type": "string", "description": "Where the index cache lives (defaults to <project_path>/.impact)"},
                     "workspace_path": {"type": "string", "description": "Path to a workspace.toml registering sibling projects, to also compute cross-project impact"},
                     "min_confidence": {"type": "string", "enum": ["exact", "probable", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything). exact = an import or declared type ties the call to this symbol; probable = a unique name with no scope evidence; heuristic = an ambiguous name"},
                     "explain": {"type": "boolean", "description": "Include each INDIRECT entry's chain back to its nearest DIRECT dependent (default: false)"},
                     "summary": {"type": "boolean", "description": "Compact response: exact per-category counts, DIRECT listed in full, INDIRECT grouped and counted by file with only the first few entries shown per group. Use this for a file with many transitive dependents, where the full result risks exceeding the response size limit (default: false)"}
                 },
-                "required": ["path"]
+                "required": ["path", "project_path"]
             }
         },
         {
@@ -227,14 +227,14 @@ fn tool_list() -> Value {
                 "type": "object",
                 "properties": {
                     "description": {"type": "string", "description": "The change, in impact's deterministic grammar"},
-                    "project_path": {"type": "string", "description": "Project root the cache was built against (defaults to the current directory)"},
+                    "project_path": {"type": "string", "description": "Project root the cache was built against (the same path passed to impact_index)"},
                     "cache_dir": {"type": "string", "description": "Where the index cache lives (defaults to <project_path>/.impact)"},
                     "workspace_path": {"type": "string", "description": "Path to a workspace.toml registering sibling projects, to also compute cross-project impact"},
                     "min_confidence": {"type": "string", "enum": ["exact", "probable", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything). exact = an import or declared type ties the call to this symbol; probable = a unique name with no scope evidence; heuristic = an ambiguous name"},
                     "explain": {"type": "boolean", "description": "Include each INDIRECT entry's chain back to its nearest DIRECT dependent (default: false)"},
                     "summary": {"type": "boolean", "description": "Compact response: exact per-category counts, DIRECT listed in full, INDIRECT grouped and counted by file with only the first few entries shown per group. Use this for a change with many transitive dependents, where the full result risks exceeding the response size limit (default: false)"}
                 },
-                "required": ["description"]
+                "required": ["description", "project_path"]
             }
         },
         {
@@ -244,14 +244,14 @@ fn tool_list() -> Value {
                 "type": "object",
                 "properties": {
                     "diff": {"type": "string", "description": "Unified diff text, e.g. the output of `git diff`"},
-                    "project_path": {"type": "string", "description": "Project root the cache was built against (defaults to the current directory)"},
+                    "project_path": {"type": "string", "description": "Project root the cache was built against (the same path passed to impact_index)"},
                     "cache_dir": {"type": "string", "description": "Where the index cache lives (defaults to <project_path>/.impact)"},
                     "workspace_path": {"type": "string", "description": "Path to a workspace.toml registering sibling projects, to also compute cross-project impact"},
                     "min_confidence": {"type": "string", "enum": ["exact", "probable", "heuristic"], "description": "Only include DIRECT/INDIRECT dependents resolved with at least this confidence (default: heuristic, i.e. show everything). exact = an import or declared type ties the call to this symbol; probable = a unique name with no scope evidence; heuristic = an ambiguous name"},
                     "explain": {"type": "boolean", "description": "Include each INDIRECT entry's chain back to its nearest DIRECT dependent (default: false)"},
                     "summary": {"type": "boolean", "description": "Compact response: exact per-category counts, DIRECT listed in full, INDIRECT grouped and counted by file with only the first few entries shown per group. Use this for a diff with many transitive dependents, where the full result risks exceeding the response size limit (default: false)"}
                 },
-                "required": ["diff"]
+                "required": ["diff", "project_path"]
             }
         },
         {
@@ -442,7 +442,9 @@ fn tool_file(args: &Value) -> Value {
     let Some(path) = path_arg(args, "path") else {
         return json!({"error": "path is required"});
     };
-    let project_path = path_arg(args, "project_path");
+    let Some(project_path) = path_arg(args, "project_path") else {
+        return json!({"error": "project_path is required"});
+    };
     let cache_dir = path_arg(args, "cache_dir");
     let workspace_path = path_arg(args, "workspace_path");
     let min_confidence = match min_confidence_arg(args) {
@@ -452,10 +454,10 @@ fn tool_file(args: &Value) -> Value {
     let explain = explain_arg(args);
     let summary = summary_arg(args);
 
-    let result = ops::query_file(&path, project_path.as_deref(), cache_dir.as_deref())
+    let result = ops::query_file(&path, Some(&project_path), cache_dir.as_deref())
         .map(|local| apply_min_confidence(local, min_confidence))
         .map(|local| impact_core::apply_explain(local, explain))
-        .and_then(|local| with_workspace(local, project_path.as_deref(), workspace_path.as_deref()))
+        .and_then(|local| with_workspace(local, Some(&project_path), workspace_path.as_deref()))
         .and_then(|(local, cross_project)| finalize_report(local, cross_project, summary));
     ok_or_error(result)
 }
@@ -464,7 +466,9 @@ fn tool_change(args: &Value) -> Value {
     let Some(description) = str_arg(args, "description") else {
         return json!({"error": "description is required"});
     };
-    let project_path = path_arg(args, "project_path");
+    let Some(project_path) = path_arg(args, "project_path") else {
+        return json!({"error": "project_path is required"});
+    };
     let cache_dir = path_arg(args, "cache_dir");
     let workspace_path = path_arg(args, "workspace_path");
     let min_confidence = match min_confidence_arg(args) {
@@ -474,10 +478,10 @@ fn tool_change(args: &Value) -> Value {
     let explain = explain_arg(args);
     let summary = summary_arg(args);
 
-    let result = ops::apply_change(&description, project_path.as_deref(), cache_dir.as_deref())
+    let result = ops::apply_change(&description, Some(&project_path), cache_dir.as_deref())
         .map(|local| apply_min_confidence(local, min_confidence))
         .map(|local| impact_core::apply_explain(local, explain))
-        .and_then(|local| with_workspace(local, project_path.as_deref(), workspace_path.as_deref()))
+        .and_then(|local| with_workspace(local, Some(&project_path), workspace_path.as_deref()))
         .and_then(|(local, cross_project)| finalize_report(local, cross_project, summary));
     ok_or_error(result)
 }
@@ -486,7 +490,9 @@ fn tool_diff(args: &Value) -> Value {
     let Some(diff) = str_arg(args, "diff") else {
         return json!({"error": "diff is required"});
     };
-    let project_path = path_arg(args, "project_path");
+    let Some(project_path) = path_arg(args, "project_path") else {
+        return json!({"error": "project_path is required"});
+    };
     let cache_dir = path_arg(args, "cache_dir");
     let workspace_path = path_arg(args, "workspace_path");
     let min_confidence = match min_confidence_arg(args) {
@@ -496,10 +502,10 @@ fn tool_diff(args: &Value) -> Value {
     let explain = explain_arg(args);
     let summary = summary_arg(args);
 
-    let result = ops::diff_impact(&diff, project_path.as_deref(), cache_dir.as_deref())
+    let result = ops::diff_impact(&diff, Some(&project_path), cache_dir.as_deref())
         .map(|local| apply_min_confidence(local, min_confidence))
         .map(|local| impact_core::apply_explain(local, explain))
-        .and_then(|local| with_workspace(local, project_path.as_deref(), workspace_path.as_deref()))
+        .and_then(|local| with_workspace(local, Some(&project_path), workspace_path.as_deref()))
         .and_then(|(local, cross_project)| finalize_report(local, cross_project, summary));
     ok_or_error(result)
 }

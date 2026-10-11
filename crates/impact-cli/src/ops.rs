@@ -68,12 +68,24 @@ pub fn index_project(
 
 /// Resolves `--project`/`--cache-dir` the same way for every command that reads an
 /// existing index (`query`, `change`) and opens the cache at that location.
+///
+/// A missing cache is an error, not an empty one: opening it would create `.impact/` in a
+/// project nobody indexed and report no dependents, which reads as "safe to change".
 fn open_project_cache(
     project: Option<&Path>,
     cache_dir: Option<&Path>,
 ) -> anyhow::Result<(PathBuf, Cache)> {
     let project_root = project.unwrap_or_else(|| Path::new(".")).canonicalize()?;
-    let cache = Cache::open(&cache_path(&project_root, cache_dir))?;
+    let cache_file = cache_path(&project_root, cache_dir);
+    if !cache_file.is_file() {
+        anyhow::bail!(
+            "{} has not been indexed (no index at {}) — run `impact index` (the impact_index \
+             tool over MCP) on it first",
+            project_root.display(),
+            cache_file.display()
+        );
+    }
+    let cache = Cache::open(&cache_file)?;
     Ok((project_root, cache))
 }
 
