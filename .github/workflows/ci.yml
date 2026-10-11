@@ -174,8 +174,9 @@ jobs:
         run: |
           .\scripts\install.ps1
           "${{ runner.temp }}\impact-bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-      # Agent sessions keep `impact mcp` running, which locks impact.exe; an upgrade must
-      # still succeed, moving the running binary aside instead of failing to overwrite it.
+      # Agent sessions keep `impact mcp` running, which locks impact.exe, and long-lived
+      # sessions can still hold the version before last. Upgrades must succeed with two
+      # generations running, moving each aside, and clean the leftovers once they stop.
       - name: Upgrade scripts/install.ps1 while impact is running
         if: runner.os == 'Windows'
         shell: pwsh
@@ -184,22 +185,30 @@ jobs:
           IMPACT_LOCAL_ARCHIVE: dist/impact-local.zip
           IMPACT_INSTALL_DIR: ${{ runner.temp }}\impact-bin
         run: |
-          $psi = New-Object System.Diagnostics.ProcessStartInfo
-          $psi.FileName = Join-Path $env:IMPACT_INSTALL_DIR "impact.exe"
-          $psi.Arguments = "mcp"
-          $psi.UseShellExecute = $false
-          $psi.RedirectStandardInput = $true
-          $psi.RedirectStandardOutput = $true
-          $running = [System.Diagnostics.Process]::Start($psi)
-          Start-Sleep -Seconds 1
-          if ($running.HasExited) { throw "impact mcp exited before the upgrade" }
+          $bin = $env:IMPACT_INSTALL_DIR
+          function Start-Impact {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = Join-Path $bin "impact.exe"
+            $psi.Arguments = "mcp"
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardInput = $true
+            $psi.RedirectStandardOutput = $true
+            $p = [System.Diagnostics.Process]::Start($psi)
+            Start-Sleep -Seconds 1
+            if ($p.HasExited) { throw "impact mcp exited before the upgrade" }
+            $p
+          }
+          function Old-Count { @(Get-ChildItem $bin -Filter "impact.old*.exe").Count }
+          $running = @(Start-Impact)
           .\scripts\install.ps1
-          & (Join-Path $env:IMPACT_INSTALL_DIR "impact.exe") --version
-          if (-not (Test-Path (Join-Path $env:IMPACT_INSTALL_DIR "impact.old.exe"))) { throw "running binary was not moved aside" }
-          $running.Kill()
-          $running.WaitForExit()
+          if ((Old-Count) -ne 1) { throw "running binary was not moved aside" }
+          $running += Start-Impact
           .\scripts\install.ps1
-          if (Test-Path (Join-Path $env:IMPACT_INSTALL_DIR "impact.old.exe")) { throw "stale impact.old.exe was not removed" }
+          if ((Old-Count) -ne 2) { throw "second running binary was not moved aside" }
+          & (Join-Path $bin "impact.exe") --version
+          $running | ForEach-Object { $_.Kill(); $_.WaitForExit() }
+          .\scripts\install.ps1
+          if ((Old-Count) -ne 0) { throw "stale impact.old*.exe binaries were not removed" }
       - name: Verify installed binary runs
         shell: bash
         run: impact --version

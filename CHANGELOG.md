@@ -18,6 +18,13 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   cross-project matching, a FAQ, and a social preview image
   (`docs/images/social-preview.png`, from `social-preview.svg`) for the GitHub repo card.
 
+### Fixed
+
+- Windows: `scripts/install.ps1` no longer fails with "impact.exe and impact.old.exe are
+  both in use" when long-running agent sessions still run two older versions. Each running
+  binary is now moved aside under its own `impact.old-*.exe` name, and every install removes
+  the leftovers that are no longer running.
+
 ## [0.11.13] - 2026-10-11
 
 ### Fixed

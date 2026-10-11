@@ -60,21 +60,20 @@ try {
         throw "Archive did not contain impact.exe"
     }
     # A running impact.exe (an agent session's MCP server, say) can't be overwritten, but
-    # Windows does let it be renamed. Move it aside to impact.old.exe and copy the new binary
-    # into the freed name; running sessions keep the old version until they restart. A stale
-    # impact.old.exe from an earlier upgrade is removed first, unless something still holds it.
+    # Windows does let it be renamed. Move it aside under a unique impact.old-*.exe name and
+    # copy the new binary into the freed name; running sessions keep the old version until
+    # they restart. Long-lived sessions can hold several old versions at once, so each name is
+    # unique, and every install removes whichever leftovers are no longer running.
     $Dest = Join-Path $InstallDir "impact.exe"
-    $OldDest = Join-Path $InstallDir "impact.old.exe"
-    Remove-Item $OldDest -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -Path $InstallDir -Filter "impact.old*.exe" -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
     if (Test-Path $Dest) {
         try {
             Remove-Item $Dest -Force
         } catch {
-            if (Test-Path $OldDest) {
-                throw "impact.exe and impact.old.exe in $InstallDir are both in use. Close the programs running impact (restart your agent sessions) and rerun the installer."
-            }
-            Rename-Item $Dest "impact.old.exe" -Force
-            Write-Host "impact is running, so the old binary was moved to $OldDest. Restart your agent sessions to pick up the new version."
+            $OldName = "impact.old-" + [System.Guid]::NewGuid().ToString("N").Substring(0, 8) + ".exe"
+            Rename-Item $Dest $OldName
+            Write-Host "impact is running, so the old binary was moved to $(Join-Path $InstallDir $OldName). Restart your agent sessions to pick up the new version; the next install removes it."
         }
     }
     Copy-Item $Binary.FullName $Dest -Force
