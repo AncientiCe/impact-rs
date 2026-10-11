@@ -4,6 +4,14 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows: `scripts/install.ps1` can now upgrade impact while it is running. Agent sessions
+  keep `impact mcp` running, which locks `impact.exe`, so the installer failed with "being
+  used by another process". It now moves the running binary to `impact.old.exe`, installs
+  the new one in its place, and removes the leftover on the next install. Sessions that are
+  already running keep the old version until they restart.
+
 ## [0.11.12] - 2026-10-11
 
 ### Fixed

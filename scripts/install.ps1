@@ -59,7 +59,25 @@ try {
     if (-not $Binary) {
         throw "Archive did not contain impact.exe"
     }
-    Copy-Item $Binary.FullName (Join-Path $InstallDir "impact.exe") -Force
+    # A running impact.exe (an agent session's MCP server, say) can't be overwritten, but
+    # Windows does let it be renamed. Move it aside to impact.old.exe and copy the new binary
+    # into the freed name; running sessions keep the old version until they restart. A stale
+    # impact.old.exe from an earlier upgrade is removed first, unless something still holds it.
+    $Dest = Join-Path $InstallDir "impact.exe"
+    $OldDest = Join-Path $InstallDir "impact.old.exe"
+    Remove-Item $OldDest -Force -ErrorAction SilentlyContinue
+    if (Test-Path $Dest) {
+        try {
+            Remove-Item $Dest -Force
+        } catch {
+            if (Test-Path $OldDest) {
+                throw "impact.exe and impact.old.exe in $InstallDir are both in use. Close the programs running impact (restart your agent sessions) and rerun the installer."
+            }
+            Rename-Item $Dest "impact.old.exe" -Force
+            Write-Host "impact is running, so the old binary was moved to $OldDest. Restart your agent sessions to pick up the new version."
+        }
+    }
+    Copy-Item $Binary.FullName $Dest -Force
 
     # Add the install dir to the *user* PATH in the registry (never use `setx PATH "...;%PATH%"`:
     # PowerShell does not expand %PATH%, and setx would overwrite the user PATH with a literal string).
