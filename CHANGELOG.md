@@ -4,6 +4,18 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- README rewritten for first-time users: a two-minute quick start using the installed
+  binary, a per-language support matrix, a guide to reading a report and its confidence
+  tiers, every subcommand (including `install`/`uninstall`/`doctor`) in the command
+  reference, MCP tool arguments (with the now-required `project_path`), a privacy section,
+  and a troubleshooting table. It also fixes two stale claims: TypeScript/JavaScript do
+  detect tests (by `*.test.*`/`*.spec.*`/`__tests__/` file name), and API route detection is
+  not Rust/Go-only (Python and TypeScript detect FastAPI/Flask and Express/Fastify routes).
+
+## [0.11.13] - 2026-10-11
+
 ### Fixed
 
 - Windows: `scripts/install.ps1` can now upgrade impact while it is running. Agent sessions
