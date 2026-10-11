@@ -4,17 +4,19 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust 1.82+](https://img.shields.io/badge/rust-1.82%2B-orange.svg)](https://www.rust-lang.org)
 
-Tell you what you're about to break, before you break it.
+**Tell you what you're about to break, before you break it.**
 
-`impact` is a deterministic blast-radius tool for AI coding agents (and humans). Before you change a file or rename a symbol, it answers "what depends on this?" as one fast, structural query instead of an open-ended reasoning problem — turning "read the codebase and guess" into a tool call with a trustworthy, repeatable answer.
+`impact` answers one question, fast and the same way every time: *"if I change this, what else is affected?"* Point it at a file, a symbol, or a `git diff`, and it lists every caller (direct and transitive), the API routes, events and database tables involved, and the tests that cover it.
 
-```
-$ impact query src/payment/service.rs
+It works for people at a terminal and for AI coding agents over [MCP](https://modelcontextprotocol.io). Agents get one tool call with a repeatable answer, instead of reading half the codebase and guessing.
+
+```console
+$ impact query src/repo.rs
 
 DIRECT
-  payment::controller::PaymentController::handle
+  handlers::PaymentHandler::create_payment_route  src/handlers.rs:6
 INDIRECT
-  order::OrderService::checkout
+  e2e_tests::creates_payment_route_end_to_end  src/e2e_tests.rs:4
 API
   POST /payments
 EVENTS
@@ -22,116 +24,113 @@ EVENTS
 DATABASE
   payments
 TESTS
-  3 affected tests
+  1 affected tests
+  e2e_tests::creates_payment_route_end_to_end  src/e2e_tests.rs:4
 ```
 
-## What it does
+- **Fast.** Parses locally with tree-sitter. Re-indexing an unchanged project takes about 0.1s, and a query takes tens of milliseconds ([numbers](#performance)).
+- **Deterministic.** No model in the loop, so the same input always gives the same report.
+- **Errs toward over-reporting.** When it can't tell which of several same-named symbols a call means, it lists all of them and labels the match, rather than guessing and missing a caller.
+- **Private.** Your code never leaves your machine ([details](#privacy-and-network-access)).
+- **8 languages.** Rust, TypeScript/JavaScript (including React and React Native), Python, Go, Kotlin, Swift and C++.
 
-- **`impact index <path>`** — indexes a project into a local SQLite cache (content-hash-gated, so unchanged files are skipped on re-index).
-- **`impact query <file>`** — the blast radius of everything declared in one file: direct callers, transitive (indirect) callers, the API routes / event types / database tables the affected code touches, and how many tests exercise any of it.
-- **`impact change "<description>"`** — the same blast radius for a specific symbol-level change, described in a small deterministic grammar (never natural language, so the same input always resolves the same way): `rename <path>`, `remove <path>`, `remove variant <Enum>::<Variant>`, `remove field <Type>.<field>`, `change signature of <path>`.
-- **`impact diff`** — the combined blast radius of a unified diff (`git diff | impact diff`, or `impact diff --file some.patch`): every symbol the diff's touched lines fall inside, across every file it mentions, in one call instead of one `impact query` per touched file. Requires the project to be indexed against the diff's *new* side — the working tree as it currently stands, which is what `git diff` on uncommitted changes already matches.
-- **`impact mcp`** — an MCP stdio server exposing `impact_index` / `impact_file` / `impact_change` / `impact_diff` as tools, so an agent can call this directly instead of reading the whole codebase to guess what a change affects.
-- **`impact hook pre-tool-use`** — a Claude Code `PreToolUse` hook: reads the hook payload on stdin and reminds the agent to check blast radius at the moments the protocol names — the session's first file edit, any `git commit`, and opening a pull or merge request (`gh pr create`, `glab mr create`), where it asks for the `impact_diff` blast radius in the description. `impact install` registers it in `settings.json`; a rule can be read once and forgotten, a hook fires whether or not the agent remembered.
-- **Cross-project impact** — register sibling repos in a `workspace.toml` and `--workspace` extends a report with which *other* projects share the same API route / event / table identity, confidence-tiered (`Declared` / `Strong` / `Weak`) so identity coincidences don't masquerade as real dependencies.
+---
 
-Supports Rust, TypeScript/TSX (React), JavaScript/JSX (React Native), Python, Go, Kotlin (Android), Swift, and C++ today. The core (`impact-core`) is language-agnostic by design — each language is a pluggable adapter (tree-sitter-based symbol/call extraction), and adding another language means writing one more adapter crate, not touching the engine, linker, or MCP surface. Every adapter after the first (Rust) proved that boundary holds by adding zero lines to `impact-core`.
+## Contents
 
-Full API/EVENTS/DATABASE contract detection (axum/sqlx/event conventions) is currently Rust-only. Go additionally detects one API shape — `net/http`'s Go 1.22+ method-prefixed routing (`mux.HandleFunc("POST /payments", handler)`) — in the same `"{VERB} {path}"` identity format the Rust detector uses, so a Go and a Rust service registering the same route are identity-matchable across a `workspace.toml`; EVENTS/DATABASE detection isn't wired up for Go yet. The remaining five languages get DIRECT/INDIRECT/TESTS only. Test detection follows whatever convention a language actually has one unambiguous answer for — pytest's `test`-prefix, `go test`'s `TestXxx` in `_test.go`, JUnit's `@Test`, XCTest's `test`-prefixed `XCTestCase` methods — and is intentionally left off for TypeScript/JavaScript, where Jest/Vitest/Mocha disagree.
+- [Install](#install)
+- [Quick start (2 minutes)](#quick-start)
+- [Use it with an AI coding agent](#use-it-with-an-ai-coding-agent)
+- [Reading a report](#reading-a-report)
+- [Language support](#language-support)
+- [Command reference](#command-reference)
+- [Describing a change: the `impact change` grammar](#describing-a-change-the-impact-change-grammar)
+- [MCP tools](#mcp-tools)
+- [Configuration](#configuration)
+- [Cross-project impact](#cross-project-impact)
+- [Privacy and network access](#privacy-and-network-access)
+- [Troubleshooting](#troubleshooting)
+- [How it works](#how-it-works)
+- [Performance](#performance)
+- [Contributing](#contributing)
 
-## How it works
+---
 
-Structural resolution, not a compiler: `impact` parses source with [tree-sitter](https://tree-sitter.github.io/tree-sitter/), extracts symbols and call sites, and resolves references using what the calling file itself says about a name — its `import`/`require`/`use` statements, its own declarations, and the declared type of the field or binding a method is called on — falling back to a bare short name only when none of that ties the call to a specific target. It doesn't type-check, so it can't always tell which of several same-named candidates a call resolves to — when that happens, it reports *all* of them rather than guessing wrong and staying silent. A blast-radius tool should over-report, not under-report: a false positive is visible and easy to dismiss, a false negative is invisible and costs you later.
+## Install
 
-Every DIRECT/INDIRECT entry carries the confidence behind it, and a multi-hop chain is only as trustworthy as its weakest hop: `Exact` when an import, a declared field/binding type, or a same-file declaration tied every hop back to what you queried, `Probable` when a hop matched only a project-unique bare name, `Heuristic` when a hop matched a bare short name shared by more than one candidate. Tree-text output tags anything below `Exact` inline (`caller::maybe_this [heuristic]`); `--min-confidence exact|probable` (CLI) or `min_confidence: "exact"|"probable"` (MCP) drops the weaker tiers when you only want what's certain.
+| Platform | Command |
+|---|---|
+| macOS / Linux (Homebrew) | `brew install ancientice/impact/impact` |
+| macOS / Linux (script) | `curl -fsSL https://raw.githubusercontent.com/AncientiCe/impact-rs/master/scripts/install.sh \| sh` |
+| Windows (PowerShell) | `irm https://raw.githubusercontent.com/AncientiCe/impact-rs/master/scripts/install.ps1 \| iex` |
+| Any platform, from source (needs Rust 1.82+) | `cargo install --git https://github.com/AncientiCe/impact-rs --locked impact-cli` |
 
-A symbol with a wide blast radius (a well-used file, a change touching a shared type) can produce hundreds of INDIRECT entries — enough to exceed an MCP client's response size limit on an ordinary query. `--summary` (CLI) or `summary: true` (MCP) trades the full listing for a compact one: exact counts per category, DIRECT entries in full (that bucket is usually small), and INDIRECT entries grouped and counted by file, with only the first few shown inline per file. Opt-in and off by default, the same as `--min-confidence`/`--explain`.
+The install scripts put the binary in `~/.local/bin` on macOS/Linux and `%LOCALAPPDATA%\Programs\impact\bin` on Windows. Set `IMPACT_INSTALL_DIR` to put it somewhere else. Every [tagged release](https://github.com/AncientiCe/impact-rs/releases) has prebuilt binaries for Linux x86_64, macOS x86_64/arm64 and Windows x86_64. `impact` is not on crates.io yet.
 
-## Installation
-
-**macOS / Linux (Homebrew):**
+Check that it worked:
 
 ```bash
-brew install ancientice/impact/impact
+impact --version
 ```
 
-**macOS / Linux (install script):**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/AncientiCe/impact-rs/master/scripts/install.sh | sh
-```
-
-**Windows (PowerShell):**
-
-```powershell
-irm https://raw.githubusercontent.com/AncientiCe/impact-rs/master/scripts/install.ps1 | iex
-```
-
-**From source (any platform, requires Rust):**
-
-```bash
-cargo install --git https://github.com/AncientiCe/impact-rs --locked impact-cli
-```
-
-Prebuilt binaries and the Homebrew tap are populated by [`.github/workflows/release.yml`](.github/workflows/release.yml) on each tagged release (linux x86_64, macOS x86_64/arm64, Windows x86_64); `cargo install --git` always works off the latest source. `impact` is not yet published to crates.io.
-
-**Updates.** `impact` checks once a day whether a newer release is out and, if so, says so on stderr after an analysis command, along with how to upgrade (`brew upgrade impact`, re-running the install script, or the releases page, depending on how it was installed). Over MCP, the same notice rides along with the first tool result of a session, worded for the agent to pass on to you rather than act on. It never downloads or installs anything itself. The check is a single request to GitHub's releases API with a 2-second timeout; offline, it stays silent. It is off when `CI` is set, and `IMPACT_NO_UPDATE_CHECK=1` turns it off entirely.
+**Upgrading.** Re-run the command you installed with, or use `brew upgrade impact`. `impact` tells you when a newer release is out (see [Privacy](#privacy-and-network-access)), but it never installs anything by itself. On Windows, upgrading works even while an agent session has `impact mcp` running. Sessions that are already open keep the old version until they restart.
 
 ## Quick start
 
+Run these from the root of any project:
+
 ```bash
-cargo build --workspace
+# 1. Build the index (stored in ./.impact/; later runs only re-parse changed files)
+impact index .
 
-cargo run -p impact-cli -- index .
-cargo run -p impact-cli -- query src/some/file.rs
-cargo run -p impact-cli -- change "rename some::Type::variant"
-cargo run -p impact-cli -- mcp
+# 2. What depends on this file?
+impact query src/payments/service.rs
+
+# 3. What breaks if I rename / remove / re-sign a specific symbol?
+impact change "rename PaymentStatus::Failed"
+impact change "change signature of PaymentService::charge"
+
+# 4. What does my uncommitted work affect?
+git diff | impact diff
 ```
 
-## CLI reference
+Two habits worth having:
 
-| Command | Description |
-|---|---|
-| `impact index <path> [--force] [--cache-dir <dir>]` | Index (or re-index) a project. `--force` wipes the cache and re-parses everything, ignoring content-hash skips. |
-| `impact query <file> [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|probable\|heuristic] [--summary] [--json]` | Blast radius of a file. |
-| `impact change "<description>" [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|probable\|heuristic] [--summary] [--json]` | Blast radius of one symbol-level change. |
-| `impact diff [--file <path>] [--project <dir>] [--cache-dir <dir>] [--workspace <toml>] [--min-confidence exact\|probable\|heuristic] [--summary] [--json]` | Blast radius of a unified diff — reads from `--file`, or stdin if omitted. |
-| `impact report-blindspot <title> [--body <text>] [--kind missed-edge\|false-positive\|crash\|other] [--language <lang>] [--repo <owner/repo>] [--submit] [--json]` | Draft a GitHub issue for a case where `impact` missed or misreported something. Reads the body from stdin if `--body` is omitted. Without `--submit` this only prints the draft — no network call — noting a newer release if an earlier command already learned of one. `--submit` files it via `gh issue create`, after checking `gh issue list` for an existing report with the same fingerprint. |
-| `impact mcp` | Start the MCP stdio server. Blocks until stdin closes. |
-| `impact gain [--daily\|--weekly\|--monthly] [--json]` | Usage analytics for `index`/`query`/`change`/`diff` (CLI and MCP combined), rolled up by day/week/month and broken down by client. Defaults to monthly. Recorded locally to `~/.impact/analytics.sqlite`; disable with `IMPACT_NO_ANALYTICS=1`. |
+- **Add `.impact/` to your `.gitignore`.** It's a local cache, rebuilt on demand.
+- **Re-run `impact index .` after you change code.** A report only reflects the last index. Re-indexing is cheap because unchanged files are skipped by content hash.
 
-## `--change` grammar
+Every query command also takes `--json` for scripts and CI, `--summary` for huge results, `--min-confidence exact` to hide guesses, and `--explain` to show how each indirect caller is reached.
 
-```text
-rename <path>
-rename <path> to <path>
-remove <path>
-remove variant <path>::<ident>
-remove field <path>.<ident>
-change signature of <path>
+## Use it with an AI coding agent
+
+Agents need two things: the **tools** (an MCP server) and a **rule** telling them *when* to use the tools. `impact install` sets up both:
+
+```bash
+impact install                                   # Cursor, Codex, Claude Code and Claude Desktop, user-wide
+impact install --client cursor --scope project   # one client, this project only
+impact install --dry-run                         # show what would change, write nothing
+impact doctor                                    # is everything registered and up to date?
+impact uninstall                                 # remove only what impact added
 ```
 
-Unparseable input is a hard error with a usage hint — never a best-effort guess. Determinism is the whole pitch: the same description must always resolve the same way, independent of any model reading it.
+| Client | MCP server | Rule | Hook |
+|---|---|---|---|
+| Claude Code | ✅ | managed block in `CLAUDE.md` | ✅ `PreToolUse` |
+| Codex | ✅ | managed block in `AGENTS.md` | — |
+| Cursor | ✅ | `.cursor/rules/impact.mdc` | — |
+| Claude Desktop | ✅ | — | — |
 
-`<path>` is a `::`-joined qualified symbol path from the language's own indexed structure — module/package segments followed by the symbol, e.g. Rust's `some::Type::variant` or, for a Go method reached through nested packages, `service::repositories::changes::repository::Repository::AddOperation` (exactly what `impact_file`/`impact query` print in a report's `direct`/`indirect` entries — copy a path from there when unsure). It is never a filesystem path: `some/file.go::Symbol` does not resolve. A shorter form also works — either the last two segments (`Repository::AddOperation`) or just the bare symbol name (`AddOperation`) — but the fewer segments given, the more likely the name matches more than one symbol project-wide, which resolves to all of them at `Heuristic` confidence instead of one `Exact` match.
+`--client` accepts `cursor`, `codex`, `claude`, `claude-desktop` or `all` (the default). `--no-rule` and `--no-hook` skip those parts.
 
-## MCP tools
+**Why a hook too?** An agent can lose track of a rule partway through a session, but a hook runs every time. For Claude Code, `impact install` adds a `PreToolUse` hook to `settings.json`, merged with any hooks you already have. It reminds the agent to check blast radius before the first file edit of a session, before every `git commit`, and when it opens a pull or merge request (`gh pr create`, `glab mr create`). For a PR, the reminder asks it to put the `impact_diff` result in the description.
 
-| Tool | Description |
-|---|---|
-| `impact_index` | Index (or re-index) a project. |
-| `impact_file` | Blast radius of a file, optionally extended with `workspace_path` for cross-project matches; `min_confidence: "exact"\|"probable"\|"heuristic"` filters DIRECT/INDIRECT entries; `summary: true` returns the compact grouped-by-file form instead of the full listing. |
-| `impact_change` | Blast radius of a `--change`-style description, same `workspace_path`/`min_confidence`/`summary` support. |
-| `impact_diff` | Blast radius of a unified diff (`diff` argument — the raw text, e.g. `git diff` output), same `workspace_path`/`min_confidence`/`summary` support. |
-| `impact_report_blindspot` | Draft a GitHub issue for a case where `impact` missed or misreported something (`title`, `body`; optional `kind`, `language`, `repo`). Without `submit: true` this only returns the draft — no network call — with `newer_release` set if an earlier command already learned of one. `submit: true` files it via `gh issue create`, after checking for an existing report with the same fingerprint. |
+### Any other MCP client
 
-Only calls `impact` can see syntactically become edges. A call reached through a registry or selector indirection (`getSelectors(state).canSchedule(...)`), or a function handed to something else as a value (`transform: camelizeOrder`) rather than called, leaves no edge — so an empty or thin blast radius is not proof that nothing consumes the symbol. Cross-check the symbol name with `grep` before concluding a change is safe.
+Register the server by hand:
 
 ```bash
 claude mcp add impact -- impact mcp
 ```
-
-or add it manually to any MCP-speaking client's config:
 
 ```json
 {
@@ -141,20 +140,10 @@ or add it manually to any MCP-speaking client's config:
 }
 ```
 
-## Using this with an agent
+Then paste the rule below into the agent's system prompt or rules file. It is exactly what `impact install` writes ([`crates/impact-cli/src/install/rule.rs`](crates/impact-cli/src/install/rule.rs)), so the agent behaves the same as one set up by `impact install`.
 
-Registering the MCP server (above) only gives an agent the *tools*; it still needs telling *when* to call them. `impact install` does both in one step for Cursor, Codex, Claude Code, and Claude Desktop — it registers the MCP server and writes an agent rule (a standalone `.cursor/rules/impact.mdc` for Cursor, a managed block in `AGENTS.md`/`CLAUDE.md` for Codex/Claude) with the same instructions every time, so every project gets consistent behavior instead of only the ones wired up by hand:
-
-```bash
-impact install                 # all four clients, user (global) scope
-impact install --client cursor --scope project
-impact install --no-hook       # rule and MCP server only, no Claude Code hook
-impact doctor                  # check what's configured and whether the rule and hook are current
-```
-
-For Claude Code it also registers a `PreToolUse` hook in `settings.json`, merging into whatever hooks are already there. That is the part that does not depend on the agent remembering anything: the client runs `impact hook pre-tool-use` before the session's first file edit, before any `git commit`, and before a pull or merge request is opened, and the reminder comes back as context whether or not the rule above was still in mind. `impact uninstall` removes only impact's own entry.
-
-The rule text `impact install` writes — reproduced here for any other MCP-speaking agent (or CI system prompt) it doesn't have a built-in installer for:
+<details>
+<summary><b>The agent rule (click to expand)</b></summary>
 
 ```text
 # Impact Blast-Radius Protocol — MANDATORY
@@ -220,79 +209,235 @@ reported one that doesn't exist.*
 <path>`. Not natural language — an unrecognized description is a hard error.
 ```
 
-This is exactly what `impact install` generates (`crates/impact-cli/src/install/rule.rs`), not a paraphrase — pasting it verbatim into any other agent's system prompt or rules mechanism gets the same behavior `impact install`'s supported clients get automatically.
+</details>
+
+## Reading a report
+
+| Section | What it means |
+|---|---|
+| `DIRECT` | Code that calls or references something in the target. Each entry gives the symbol and its `file:line`. |
+| `INDIRECT` | Code that reaches the target through one or more DIRECT callers: callers of callers, all the way up. |
+| `API` | HTTP routes whose handlers are in the affected code, written as `VERB /path`. |
+| `EVENTS` | Event types the affected code produces or consumes. |
+| `DATABASE` | Tables the affected code queries. |
+| `TESTS` | How many tests reach the affected code, and which ones. |
+
+### Confidence
+
+`impact` doesn't type-check, so each DIRECT/INDIRECT entry carries a label for how sure the match is:
+
+| Tier | Meaning | Shown as |
+|---|---|---|
+| `exact` | An import, a declared field or variable type, or a declaration in the same file ties every step back to the target. | no tag |
+| `probable` | At least one step matched only by a name that is unique in the project. | `[probable]` |
+| `heuristic` | At least one step matched a name shared by several symbols, so it might be one of the others. | `[heuristic]` |
+
+A chain of calls is only as strong as its weakest step. To see only `exact` matches, use `--min-confidence exact` (or `min_confidence: "exact"` over MCP). To see the chain behind a doubtful INDIRECT entry without reading code, use `--explain`.
+
+### What it can't see
+
+`impact` only sees calls written out in the source. A call made through a registry or selector (`getSelectors(state).canSchedule(...)`), or a function passed as a value instead of called (`transform: camelizeOrder`), produces no edge. **An empty or short report does not prove nothing uses a symbol.** Search for the name with `grep` before you treat a change as safe. If you confirm that `impact` missed something or reported something that isn't there, please [report it](#found-a-wrong-result).
+
+## Language support
+
+| Language | Callers (DIRECT/INDIRECT) | Tests detected by | API routes | Events / DB tables |
+|---|---|---|---|---|
+| Rust | ✅ | `#[test]`, `#[tokio::test]`, `#[async_std::test]` | axum | ✅ marker trait or naming convention · sqlx `query!`-family macros |
+| TypeScript / TSX / JavaScript / JSX | ✅ | `*.test.*`, `*.spec.*`, `__tests__/` file names | Express, Fastify (named handlers) | — |
+| Python | ✅ | pytest `test_` prefix | FastAPI, Flask | — |
+| Go | ✅ | `TestXxx` in `_test.go` | `net/http` Go 1.22+ (`mux.HandleFunc("POST /payments", h)`) | — |
+| Kotlin | ✅ | JUnit `@Test` | — | — |
+| Swift | ✅ | XCTest `test…` methods on `XCTestCase` | — | — |
+| C++ | ✅ (including out-of-line `Type::method` definitions) | — (no single convention across GoogleTest, Catch2 and Boost.Test) | — | — |
+
+Routes use the same `VERB /path` format in every language, so a Go service and a TypeScript client using the same route can be matched across repositories (see [Cross-project impact](#cross-project-impact)).
+
+Files covered by `.gitignore` are skipped automatically. To skip more, see [Configuration](#configuration).
+
+## Command reference
+
+Run `impact <command> --help` for the full flag list of any command.
+
+| Command | What it does |
+|---|---|
+| `impact index <path> [--force] [--cache-dir <dir>] [--json]` | Builds or refreshes the index. `--force` deletes the cache and re-parses everything. |
+| `impact query <file>` | Blast radius of everything declared in one file. |
+| `impact change "<description>"` | Blast radius of one symbol-level change ([grammar](#describing-a-change-the-impact-change-grammar)). |
+| `impact diff [--file <patch>]` | Combined blast radius of a unified diff, read from stdin or `--file`. The index must match the diff's *new* side, which is your working tree as it is now. |
+| `impact install` / `uninstall` / `doctor` | Set up, remove or check agent integration ([details](#use-it-with-an-ai-coding-agent)). |
+| `impact mcp` | Runs the MCP stdio server. It keeps running until stdin closes. |
+| `impact report-blindspot "<title>"` | Drafts a GitHub issue about a wrong result ([details](#found-a-wrong-result)). |
+| `impact gain [--daily\|--weekly\|--monthly] [--json]` | Your local usage statistics, per period and per client. |
+| `impact hook pre-tool-use` | The Claude Code hook entry point. `impact install` sets it up, so you don't run it yourself. |
+
+`query`, `change` and `diff` share these options:
+
+| Option | Effect |
+|---|---|
+| `--project <dir>` | The project root the index was built from. Defaults to the current directory. |
+| `--cache-dir <dir>` | Where the index lives. Defaults to `<project>/.impact`. |
+| `--workspace <toml>` | Also report matches in sibling projects ([details](#cross-project-impact)). |
+| `--min-confidence exact\|probable\|heuristic` | Hides DIRECT/INDIRECT entries below this tier. |
+| `--explain` | Shows how each INDIRECT entry is reached from its nearest DIRECT caller. |
+| `--summary` | Compact output: counts per section, all DIRECT entries, and INDIRECT entries grouped by file. Use it when a widely used file produces hundreds of entries. |
+| `--json` | Machine-readable output. |
+
+## Describing a change: the `impact change` grammar
+
+```text
+rename <path>
+rename <path> to <path>
+remove <path>
+remove variant <Enum>::<Variant>
+remove field <Type>.<field>
+change signature of <path>
+```
+
+This is a small fixed grammar, not natural language, so the same description always resolves the same way. Anything it can't parse is an error with a usage hint, not a guess.
+
+`<path>` is a symbol path joined with `::`, in the form `impact` prints it: module segments, then the symbol, such as `payments::PaymentService::charge`. If you're unsure, copy a path from the DIRECT or INDIRECT section of a report. It is **never** a file path: `src/payments.rs::charge` won't resolve. Shorter forms also work, either the last two segments (`PaymentService::charge`) or just the name (`charge`). The fewer segments you give, the more likely the name matches several symbols. Those are all reported, at `heuristic` confidence.
+
+## MCP tools
+
+`impact mcp` provides these tools. Every query tool requires `project_path`, the same root you passed to `impact_index`.
+
+| Tool | Arguments | What it does |
+|---|---|---|
+| `impact_index` | `project_path`, optional `force`, `cache_dir` | Builds or refreshes the index. Its result also lists `orphaned_events`: events that had both a producer and a consumer at the last index and have lost one of them. This often happens when an event is replaced by a direct call that leaves out something the old consumer did. |
+| `impact_file` | `project_path`, `path` | Blast radius of a file. |
+| `impact_change` | `project_path`, `description` | Blast radius of a [change description](#describing-a-change-the-impact-change-grammar). |
+| `impact_diff` | `project_path`, `diff` (the raw `git diff` text) | Blast radius of a unified diff. |
+| `impact_report_blindspot` | `title`, `body`, optional `kind`, `language`, `repo`, `submit` | Drafts a blind-spot issue. It only files one when `submit: true` is passed. |
+
+`impact_file`, `impact_change` and `impact_diff` also accept `workspace_path`, `min_confidence`, `summary`, `explain` and `cache_dir`, which work like the CLI options of the same names. Use `summary: true` when a result could exceed your client's response size limit.
 
 ## Configuration
 
-### `impact.toml` (per-project detector and index config)
+### `impact.toml`: detection and indexing, per project
 
-Controls how API routes, events, and database tables are recognized, and which files the indexer skips. All fields are optional — a project with no `impact.toml` still gets useful detection from the defaults shown below.
+Put this file at the project root. Every field is optional, and the values below are the defaults.
 
 ```toml
 [detectors.api]
-# default — axum/net-http (Rust/Go), FastAPI+Flask (Python), Express+Fastify (TS/JS)
 frameworks = ["axum", "net/http", "fastapi", "flask", "express", "fastify"]
 
 [detectors.events]
 strategy = "marker_trait"      # or "naming_convention"
-marker_trait = "Event"         # default, used when strategy = "marker_trait"
-naming_suffix = "Event"        # default, used when strategy = "naming_convention"
+marker_trait = "Event"         # types implementing this trait are events
+naming_suffix = "Event"        # with naming_convention: types ending in this are events
 
 [detectors.database]
-macros = ["query", "query_as", "query_scalar"]   # default (sqlx-family)
+macros = ["query", "query_as", "query_scalar"]   # sqlx-style macros whose SQL names tables
 
 [index]
-exclude = []   # default — extra glob patterns to skip beyond what .gitignore already covers
+exclude = []   # extra glob patterns to skip, beyond .gitignore
 ```
 
-### `workspace.toml` (cross-project registry)
+### Environment variables
+
+| Variable | Effect |
+|---|---|
+| `IMPACT_NO_UPDATE_CHECK=1` | Turns off the daily new-release check. |
+| `IMPACT_NO_ANALYTICS=1` | Turns off local usage recording (`impact gain`). |
+| `CI` | When set, the update check is skipped. |
+| `IMPACT_INSTALL_DIR` | Install scripts only: where to put the binary. |
+
+## Cross-project impact
+
+If your system spans several repositories (a backend, a web client, a worker), register them in a `workspace.toml`:
 
 ```toml
 [[projects]]
 id = "backend"
 path = "../payment-backend"
-# cache_dir = "..."            # optional override; defaults to <path>/.impact
+# cache_dir = "..."            # optional; defaults to <path>/.impact
 
 [[projects]]
 id = "web"
 path = "../checkout-web"
 
 [[links]]
-produces = "backend:POST /payments"   # names one exact contract
-consumes = "web"                      # bare project id — the other side, generally
+produces = "backend:POST /payments"   # one exact contract on one side
+consumes = "web"                      # a whole project on the other
 ```
 
-A `[[links]]` entry naming the exact contract on one side gives a `Declared` match; a link relating two projects generally (both sides bare) gives `Strong`; an identity match with no link at all is `Weak` — always shown, but clearly labeled, since two unrelated repos both exposing `POST /health` is a real possibility identity-matching alone can't rule out.
+Index each project, then add `--workspace workspace.toml` (or `workspace_path` over MCP) to any query. The report then lists which other projects share an affected API route, event or table, labeled by how strong the evidence is:
 
-## Architecture
+| Label | When |
+|---|---|
+| `Declared` | A `[[links]]` entry names this exact contract. |
+| `Strong` | A `[[links]]` entry connects the two projects in general. |
+| `Weak` | The names match but nothing links the projects. It is always shown and always labeled, because two unrelated services can both expose `POST /health`. |
+
+## Privacy and network access
+
+- **Your code stays local.** Indexing and queries run entirely on your machine. The index lives in `<project>/.impact/`.
+- **Update check.** Once a day, `impact` makes one request to GitHub's releases API (2-second timeout). If a newer version exists, it says so on stderr after an analysis command, or, over MCP, in the first tool result of a session. It never downloads or installs anything. It stays silent when offline, is skipped when `CI` is set, and `IMPACT_NO_UPDATE_CHECK=1` turns it off.
+- **Usage statistics are local.** Command counts for `impact gain` go to `~/.impact/analytics.sqlite` and are never sent anywhere. `IMPACT_NO_ANALYTICS=1` turns this off.
+- **Blind-spot reports are opt-in.** `report-blindspot` only prints a draft. It sends something only when you pass `--submit`, and then it uses your own `gh` CLI.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `… has not been indexed — run impact index first` | Run `impact index <project root>`, or `impact_index` over MCP, then query again. |
+| `"X" doesn't resolve to anything in the indexed project` | Check the [symbol path](#describing-a-change-the-impact-change-grammar) by copying one from a report. If the code changed since the last index, re-index. |
+| A caller you just added or removed isn't reflected | Reports reflect the last index. Run `impact index .` again. |
+| MCP: `project_path is required` | Pass the project root as `project_path` on every tool call. |
+| The report is enormous, or the MCP response is too large | Use `--summary` / `summary: true`, and optionally `--min-confidence exact`. |
+| An entry tagged `[heuristic]` looks wrong | Run the query again with `--explain` to see the chain behind it, or use `--min-confidence exact`. |
+| The report is empty, but you know the symbol is used | It may be used through a registry or passed as a value ([what it can't see](#what-it-cant-see)). Search with `grep`. If it's a plain call that was missed, [report it](#found-a-wrong-result). |
+| The agent never calls impact | Run `impact doctor`. If it shows something missing, run `impact install` and restart the agent. |
+
+### Found a wrong result?
+
+```bash
+impact report-blindspot "Go: method call through embedded struct not linked" --kind missed-edge --language go
+```
+
+This prints a draft issue and touches nothing else. **Remove anything private** before you submit (local paths, internal repo, file or symbol names) and describe the code pattern in general terms instead. When the draft is ready, add `--submit`. `impact` checks for an existing report with the same fingerprint, then files the issue through `gh`.
+
+## How it works
+
+`impact` parses source code with [tree-sitter](https://tree-sitter.github.io/tree-sitter/). It records every symbol and call site, then works out what each call refers to from what the calling file says: its `import`/`use`/`require` statements, its own declarations, and the declared type of the variable or field a method is called on. Only when none of that settles the question does it fall back to matching the bare name. When several symbols could match, it reports all of them with a lower confidence label.
+
+That trade-off is deliberate. An extra entry in a report is visible and easy to dismiss. A missing one goes unnoticed until the change breaks something.
+
+The engine (`impact-core`) is language-agnostic. Each language is a separate adapter crate, and adding a language means adding one crate without changing the engine, the linker or the MCP server.
 
 | Crate | Role |
 |---|---|
-| [`impact-core`](crates/impact-core) | Language-agnostic symbol graph, `LanguageAdapter`/`ContractRef` traits, SQLite-backed cache, linker, blast-radius engine, `--change` grammar, workspace/cross-project matching. Depends on the generic `tree-sitter` crate, never a specific grammar. |
-| [`impact-lang-rust`](crates/impact-lang-rust) | The Rust adapter: functions, types, traits, enum variants, match-arm references, axum/sqlx/event contract detectors. |
-| [`impact-lang-ts`](crates/impact-lang-ts) | TypeScript/TSX and JavaScript/JSX (React, React Native): functions, classes, methods, cross-file call resolution — including calls hidden inside JSX expressions — Express/Fastify named-handler route detection, `*.test.*`/`*.spec.*`/`__tests__/` file-convention test detection. |
-| [`impact-lang-python`](crates/impact-lang-python) | Functions, classes, methods, cross-file call resolution, pytest-style test detection, FastAPI/Flask route decorator detection. |
-| [`impact-lang-go`](crates/impact-lang-go) | Functions, types, receiver methods (Go's top-level `method_declaration`, not nested in a class body), `go test`-style test detection, `net/http` method-prefixed route detection. |
-| [`impact-lang-kotlin`](crates/impact-lang-kotlin) | Functions, classes, methods, JUnit `@Test` detection. |
-| [`impact-lang-swift`](crates/impact-lang-swift) | Functions, classes, methods, XCTest (`XCTestCase` inheritance) test detection. |
-| [`impact-lang-cpp`](crates/impact-lang-cpp) | Functions, classes/structs, methods — including out-of-line `Type::method` definitions, the dominant real-world C++ pattern. No test detection (no single structural convention across GoogleTest/Catch2/Boost.Test). |
-| [`impact-cli`](crates/impact-cli) | The `impact` binary — CLI subcommands and the MCP server, both built on one shared computation layer (`ops.rs`) so they can never drift from each other. |
+| [`impact-core`](crates/impact-core) | Symbol graph, SQLite cache, linker, blast-radius engine, change grammar, cross-project matching. |
+| [`impact-lang-rust`](crates/impact-lang-rust) | Rust: functions, types, traits, enum variants, match-arm references, axum/sqlx/event detection. |
+| [`impact-lang-ts`](crates/impact-lang-ts) | TypeScript/TSX and JavaScript/JSX: imports and aliases, barrel re-exports, CommonJS, calls inside JSX, Express/Fastify routes. |
+| [`impact-lang-python`](crates/impact-lang-python) | Python: functions, classes, methods, pytest, FastAPI/Flask routes. |
+| [`impact-lang-go`](crates/impact-lang-go) | Go: functions, types, receiver methods, `go test`, `net/http` routes. |
+| [`impact-lang-kotlin`](crates/impact-lang-kotlin) | Kotlin: functions, classes, methods, JUnit. |
+| [`impact-lang-swift`](crates/impact-lang-swift) | Swift: functions, classes, methods, XCTest. |
+| [`impact-lang-cpp`](crates/impact-lang-cpp) | C++: functions, classes/structs, methods, including out-of-line definitions. |
+| [`impact-cli`](crates/impact-cli) | The `impact` binary. The CLI and the MCP server share one computation layer (`ops.rs`), so their results always agree. |
 
 ## Performance
 
-Measured with a release build (`cargo build --release`) against a real ~50k-line Rust + TypeScript workspace (207 files, 2,249 indexed symbols), on a desktop-class CPU (AMD Ryzen 7 7800X3D):
+These numbers come from a release build indexing a real Rust + TypeScript workspace of about 50k lines (207 files, 2,249 symbols) on an AMD Ryzen 7 7800X3D:
 
 | Operation | Time |
 |---|---|
-| `impact index` (cold, full parse) | ~1.6s |
-| `impact index` (re-run, nothing changed — content-hash skip) | ~0.1s |
-| `impact query` (single file, warm cache) | ~35-40ms |
+| `impact index`, first run (full parse) | ~1.6s |
+| `impact index`, nothing changed (content-hash skip) | ~0.1s |
+| `impact query`, single file | ~35–40ms |
 
-One machine, one project — treat these as an order-of-magnitude sense of cost, not a guarantee. The re-index number is the one that matters most in practice: an agent calling `impact_index` before every edit (per the Blast-Radius Protocol above) pays the cold-parse cost once and the ~0.1s content-hash-skip cost on every call after, as long as most files haven't changed.
+That's one machine and one project, so take these as orders of magnitude. The second row matters most: an agent re-indexing before every edit pays for the full parse once, and about 0.1s per call after that.
 
-## Development
+## Contributing
 
-See [`AGENTS.md`](AGENTS.md) for the full rules this project holds itself to: TDD via behavior tests only (real fixture projects, real CLI/MCP invocations — no internal-function unit tests), five quality gates, no mocks/placeholders/unsafe `unwrap`, changelog discipline.
+Bug reports, blind-spot reports and new language adapters are welcome. Before you write code, read [`AGENTS.md`](AGENTS.md). It holds the project's binding rules: behavior tests written first against real fixture projects, no mocks or placeholders, no `unwrap` in production code, and a `CHANGELOG.md` entry for every change.
+
+```bash
+make check   # fmt, clippy -D warnings, test, audit, locked build: the definition of "green"
+```
+
+The five commands it runs, if you want them one at a time:
 
 ```bash
 cargo fmt --all -- --check
@@ -302,14 +447,8 @@ cargo audit
 cargo build --workspace --locked
 ```
 
-Or all five at once:
-
-```bash
-make check
-```
-
-See [`CHANGELOG.md`](CHANGELOG.md) for what's shipped so far.
+To try a local build without installing it, use `cargo run -p impact-cli -- index .` (any subcommand works). See [`CHANGELOG.md`](CHANGELOG.md) for release history.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
