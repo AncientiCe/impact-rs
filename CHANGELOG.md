@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.11.14] - 2026-10-11
+
 ### Changed
 
 - README rewritten for first-time users: a two-minute quick start using the installed
