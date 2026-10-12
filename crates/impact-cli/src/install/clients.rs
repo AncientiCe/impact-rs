@@ -45,6 +45,21 @@ pub fn config_path(options: &InstallOptions, client: Client) -> Result<PathBuf> 
         // Claude Code CLI reads `~/.claude.json` — a file, not a `~/.claude/` directory.
         Client::Claude => Ok(options.home_dir.join(".claude.json")),
         Client::ClaudeDesktop => claude_desktop_config_path(&options.home_dir),
+        Client::Gemini => match options.scope {
+            Scope::User => Ok(options.home_dir.join(".gemini").join("settings.json")),
+            Scope::Project => Ok(require_project_dir(options)?
+                .join(".gemini")
+                .join("settings.json")),
+        },
+    }
+}
+
+/// Whether `client`'s own home directory exists — the signal that the user actually
+/// runs it, used to decide whether `--client all` should reach an opt-in client.
+pub fn is_present(home_dir: &Path, client: Client) -> bool {
+    match client {
+        Client::Gemini => home_dir.join(".gemini").is_dir(),
+        Client::Cursor | Client::Codex | Client::Claude | Client::ClaudeDesktop => true,
     }
 }
 
@@ -64,17 +79,20 @@ pub fn rule_target(options: &InstallOptions, client: Client) -> Result<RuleTarge
         (Client::Claude, Scope::User) => options.home_dir.join(".claude").join("CLAUDE.md"),
         (Client::Claude, Scope::Project) => require_project_dir(options)?.join("CLAUDE.md"),
         (Client::ClaudeDesktop, _) => options.home_dir.join(".claude").join("CLAUDE.md"),
+        (Client::Gemini, Scope::User) => options.home_dir.join(".gemini").join("GEMINI.md"),
+        (Client::Gemini, Scope::Project) => require_project_dir(options)?.join("GEMINI.md"),
     };
     let kind = match client {
         Client::Cursor => RuleKind::Standalone,
-        Client::Codex | Client::Claude | Client::ClaudeDesktop => RuleKind::ManagedBlock,
+        Client::Codex | Client::Claude | Client::ClaudeDesktop | Client::Gemini => {
+            RuleKind::ManagedBlock
+        }
     };
     Ok(RuleTarget { path, kind })
 }
 
-/// Where `client`'s tool-call hooks live, if it has a hook mechanism at all. Claude Code
-/// is the only supported client that does — Cursor, Codex and Claude Desktop have none,
-/// so there is nothing for `install` to write them.
+/// Where `client`'s tool-call hooks live, if `install` wires one in at all. Claude Code
+/// is the only client that gets a hook; the others get the MCP server and rule only.
 pub fn hook_target(options: &InstallOptions, client: Client) -> Result<Option<PathBuf>> {
     let path = match (client, options.scope) {
         (Client::Claude, Scope::User) => options.home_dir.join(".claude").join("settings.json"),

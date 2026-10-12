@@ -838,3 +838,98 @@ fn doctor_flags_stale_rule_after_manual_edit() {
     assert_eq!(cursor["rule_installed"], true);
     assert_eq!(cursor["rule_current"], false);
 }
+
+// ---- Gemini CLI ----
+
+#[test]
+fn install_writes_gemini_settings_and_gemini_md_block() {
+    let home = tempfile::tempdir().unwrap();
+
+    install_client(home.path(), "gemini", &[]);
+
+    let config = read_json(&home.path().join(".gemini/settings.json"));
+    assert_eq!(config["mcpServers"]["impact"]["args"], json!(["mcp"]));
+    assert!(Path::new(config["mcpServers"]["impact"]["command"].as_str().unwrap()).is_absolute());
+
+    let gemini_md = fs::read_to_string(home.path().join(".gemini/GEMINI.md")).unwrap();
+    assert!(gemini_md.contains("<!-- BEGIN IMPACT -->"));
+    assert!(gemini_md.contains("impact_index"));
+}
+
+#[test]
+fn gemini_install_preserves_unrelated_settings() {
+    let home = tempfile::tempdir().unwrap();
+    fs::create_dir_all(home.path().join(".gemini")).unwrap();
+    fs::write(
+        home.path().join(".gemini/settings.json"),
+        serde_json::to_string_pretty(&json!({
+            "theme": "GitHub",
+            "mcpServers": {"other-tool": {"command": "other"}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    install_client(home.path(), "gemini", &[]);
+    uninstall_client(home.path(), "gemini", &[]);
+
+    let config = read_json(&home.path().join(".gemini/settings.json"));
+    assert_eq!(config["theme"], "GitHub");
+    assert_eq!(config["mcpServers"]["other-tool"]["command"], "other");
+    assert!(config["mcpServers"].get("impact").is_none());
+}
+
+#[test]
+fn gemini_project_scope_writes_under_project_dir_only() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+
+    run_ok_json(&[
+        "install",
+        "--client",
+        "gemini",
+        "--scope",
+        "project",
+        "--path",
+        project.path().to_str().unwrap(),
+        "--home-dir",
+        home.path().to_str().unwrap(),
+        "--json",
+    ]);
+
+    assert!(project.path().join(".gemini/settings.json").exists());
+    assert!(project.path().join("GEMINI.md").exists());
+    assert!(!home.path().join(".gemini").exists());
+}
+
+// ---- --client all only reaches the opt-in agents that are actually present ----
+
+#[test]
+fn client_all_skips_agents_with_no_home_directory() {
+    let home = tempfile::tempdir().unwrap();
+
+    install_client(home.path(), "all", &[]);
+    let report = doctor(home.path(), &[]);
+
+    assert!(!home.path().join(".gemini").exists());
+    assert!(report["clients"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|c| c["client"] != "gemini"));
+}
+
+#[test]
+fn client_all_installs_agents_whose_home_directory_exists() {
+    let home = tempfile::tempdir().unwrap();
+    fs::create_dir_all(home.path().join(".gemini")).unwrap();
+
+    install_client(home.path(), "all", &[]);
+
+    let config = read_json(&home.path().join(".gemini/settings.json"));
+    assert_eq!(config["mcpServers"]["impact"]["args"], json!(["mcp"]));
+    let report = doctor(home.path(), &[]);
+    let gemini = client_status(&report, "gemini");
+    assert_eq!(gemini["configured"], true);
+    assert_eq!(gemini["rule_current"], true);
+}

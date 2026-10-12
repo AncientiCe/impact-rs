@@ -23,6 +23,7 @@ pub enum Client {
     Codex,
     Claude,
     ClaudeDesktop,
+    Gemini,
 }
 
 impl Client {
@@ -32,6 +33,7 @@ impl Client {
             Client::Codex => "codex",
             Client::Claude => "claude",
             Client::ClaudeDesktop => "claude-desktop",
+            Client::Gemini => "gemini",
         }
     }
 }
@@ -45,8 +47,9 @@ impl FromStr for Client {
             "codex" => Ok(Client::Codex),
             "claude" | "claude-code" => Ok(Client::Claude),
             "claude-desktop" => Ok(Client::ClaudeDesktop),
+            "gemini" | "gemini-cli" => Ok(Client::Gemini),
             other => Err(anyhow!(
-                "unknown MCP client '{other}' (expected cursor, codex, claude, claude-desktop, or all)"
+                "unknown MCP client '{other}' (expected cursor, codex, claude, claude-desktop, gemini, or all)"
             )),
         }
     }
@@ -73,14 +76,24 @@ impl FromStr for Scope {
     }
 }
 
+/// Clients `"all"` reaches only when they are already present in `home_dir`, so a
+/// default install doesn't create config directories for agents the user doesn't have.
+const OPT_IN_CLIENTS: [Client; 1] = [Client::Gemini];
+
 /// Expands `--client`'s raw string into concrete clients — `"all"` becomes every
-/// client supported on the current platform (Claude Desktop is Windows/macOS only).
-fn parse_clients(value: &str) -> Result<Vec<Client>> {
+/// client supported on the current platform (Claude Desktop is Windows/macOS only),
+/// plus each opt-in client whose home directory exists.
+fn parse_clients(value: &str, home_dir: &std::path::Path) -> Result<Vec<Client>> {
     if value == "all" {
         let mut all = vec![Client::Cursor, Client::Codex, Client::Claude];
         if cfg!(any(target_os = "windows", target_os = "macos")) {
             all.push(Client::ClaudeDesktop);
         }
+        all.extend(
+            OPT_IN_CLIENTS
+                .into_iter()
+                .filter(|&client| clients::is_present(home_dir, client)),
+        );
         return Ok(all);
     }
     Ok(vec![value.parse()?])
@@ -103,13 +116,13 @@ impl InstallOptions {
         clients: Vec<Client>,
         scope: Scope,
         project_dir: Option<PathBuf>,
-        home_dir_override: Option<PathBuf>,
+        home_dir: PathBuf,
     ) -> Result<Self> {
         Ok(Self {
             clients,
             scope,
             project_dir,
-            home_dir: resolve_home_dir(home_dir_override)?,
+            home_dir,
             binary_path: std::env::current_exe().context("failed to resolve current executable")?,
             dry_run: false,
             install_rule: true,
@@ -150,7 +163,8 @@ pub fn build_options(
     path: Option<PathBuf>,
     home_dir: Option<PathBuf>,
 ) -> Result<InstallOptions> {
-    let clients = parse_clients(client)?;
+    let home_dir = resolve_home_dir(home_dir)?;
+    let clients = parse_clients(client, &home_dir)?;
     let scope: Scope = scope.parse()?;
     let project_dir = match (scope, path) {
         (Scope::Project, Some(path)) => Some(path),
@@ -200,7 +214,7 @@ fn install_config(options: &InstallOptions, client: Client) -> Result<(PathBuf, 
             config_io::ensure_toml_server(&mut next, &options.binary_path);
             config_io::write_toml_if_changed(&path, &existing, &next, options.dry_run)?
         }
-        Client::Cursor | Client::Claude | Client::ClaudeDesktop => {
+        Client::Cursor | Client::Claude | Client::ClaudeDesktop | Client::Gemini => {
             let existing = config_io::read_json_config(&path)?;
             let mut next = existing.clone();
             config_io::ensure_json_server(&mut next, &options.binary_path)?;
@@ -225,7 +239,7 @@ fn uninstall_config(options: &InstallOptions, client: Client) -> Result<(PathBuf
                 config_io::write_toml_if_changed(&path, &existing, &next, options.dry_run)?
             }
         }
-        Client::Cursor | Client::Claude | Client::ClaudeDesktop => {
+        Client::Cursor | Client::Claude | Client::ClaudeDesktop | Client::Gemini => {
             let existing = config_io::read_json_config(&path)?;
             let mut next = existing.clone();
             if !config_io::remove_json_server(&mut next) {
@@ -370,7 +384,7 @@ fn configured_command(client: Client, path: &std::path::Path) -> Result<Option<S
                 .and_then(|value| value.as_str())
                 .map(String::from)
         }
-        Client::Cursor | Client::Claude | Client::ClaudeDesktop => {
+        Client::Cursor | Client::Claude | Client::ClaudeDesktop | Client::Gemini => {
             let config = config_io::read_json_config(path)?;
             config
                 .get("mcpServers")

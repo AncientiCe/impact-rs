@@ -214,7 +214,8 @@ enum Command {
     /// Register the impact MCP server, and an agent rule telling the agent to verify
     /// blast radius with it before/after editing code, with local AI coding tools.
     Install {
-        /// Client(s) to configure: cursor, codex, claude, claude-desktop, or all.
+        /// Client(s) to configure: cursor, codex, claude, claude-desktop, gemini, or all.
+        /// `all` reaches gemini only when its home directory (`~/.gemini`) exists.
         #[arg(long, default_value = "all")]
         client: String,
         /// Config scope: user (global — works in every project) or project.
@@ -235,8 +236,7 @@ enum Command {
         /// Skip installing the agent rule file/block.
         #[arg(long)]
         no_rule: bool,
-        /// Skip installing the editor hook (Claude Code only — no other supported client
-        /// has a hook mechanism).
+        /// Skip installing the editor hook (Claude Code only — no other client gets one).
         #[arg(long)]
         no_hook: bool,
         /// Print machine-readable JSON instead of a human summary.

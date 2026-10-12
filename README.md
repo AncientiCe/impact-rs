@@ -119,8 +119,9 @@ impact uninstall                                 # remove only what impact added
 | Codex | ✅ | managed block in `AGENTS.md` | — |
 | Cursor | ✅ | `.cursor/rules/impact.mdc` | — |
 | Claude Desktop | ✅ | — | — |
+| Gemini CLI | ✅ `.gemini/settings.json` | managed block in `GEMINI.md` | — |
 
-`--client` accepts `cursor`, `codex`, `claude`, `claude-desktop` or `all` (the default). `--no-rule` and `--no-hook` skip those parts.
+`--client` accepts `cursor`, `codex`, `claude`, `claude-desktop`, `gemini` or `all` (the default). `all` always covers the first four, and adds Gemini CLI only when `~/.gemini` already exists, so it never creates config folders for agents you don't use. `--no-rule` and `--no-hook` skip those parts.
 
 This is the loop the rule and hook set up:
 
