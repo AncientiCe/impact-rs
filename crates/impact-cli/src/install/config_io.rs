@@ -69,13 +69,16 @@ fn json_servers_key(layout: JsonLayout) -> &'static str {
         JsonLayout::McpServers => "mcpServers",
         JsonLayout::OpenCode => "mcp",
         JsonLayout::VsCode => "servers",
+        JsonLayout::Zed => "context_servers",
     }
 }
 
 fn json_server_entry(layout: JsonLayout, binary_path: &Path) -> Value {
     let binary = path_to_string(binary_path);
     match layout {
-        JsonLayout::McpServers => json!({ "command": binary, "args": ["mcp"] }),
+        JsonLayout::McpServers | JsonLayout::Zed => {
+            json!({ "command": binary, "args": ["mcp"] })
+        }
         // OpenCode puts the arguments in `command` itself and needs the server type.
         JsonLayout::OpenCode => {
             json!({ "type": "local", "command": [binary, "mcp"], "enabled": true })
@@ -123,13 +126,13 @@ pub fn json_server_command(config: &Value, layout: JsonLayout) -> Option<String>
         .and_then(|servers| servers.get("impact"))
         .and_then(|server| server.get("command"))?;
     let binary = match layout {
-        JsonLayout::McpServers | JsonLayout::VsCode => command,
+        JsonLayout::McpServers | JsonLayout::VsCode | JsonLayout::Zed => command,
         JsonLayout::OpenCode => command.get(0)?,
     };
     binary.as_str().map(String::from)
 }
 
-// ---- JSONC (VS Code mcp.json, ...) — edited as a syntax tree so comments survive ----
+// ---- JSONC (VS Code mcp.json, Zed settings.json) — edited as a syntax tree so comments survive ----
 
 fn parse_jsonc(text: &str) -> Result<CstRootNode> {
     CstRootNode::parse(text, &ParseOptions::default()).map_err(|error| anyhow!("{error}"))

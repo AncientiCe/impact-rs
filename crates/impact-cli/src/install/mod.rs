@@ -30,6 +30,7 @@ pub enum Client {
     OpenCode,
     #[serde(rename = "vscode")]
     VsCode,
+    Zed,
 }
 
 impl Client {
@@ -44,6 +45,7 @@ impl Client {
             Client::Windsurf => "windsurf",
             Client::OpenCode => "opencode",
             Client::VsCode => "vscode",
+            Client::Zed => "zed",
         }
     }
 }
@@ -62,8 +64,9 @@ impl FromStr for Client {
             "windsurf" => Ok(Client::Windsurf),
             "opencode" => Ok(Client::OpenCode),
             "vscode" | "vs-code" | "copilot" => Ok(Client::VsCode),
+            "zed" => Ok(Client::Zed),
             other => Err(anyhow!(
-                "unknown MCP client '{other}' (expected cursor, codex, claude, claude-desktop, gemini, kiro, windsurf, opencode, vscode, or all)"
+                "unknown MCP client '{other}' (expected cursor, codex, claude, claude-desktop, gemini, kiro, windsurf, opencode, vscode, zed, or all)"
             )),
         }
     }
@@ -92,12 +95,13 @@ impl FromStr for Scope {
 
 /// Clients `"all"` reaches only when they are already present in `home_dir`, so a
 /// default install doesn't create config directories for agents the user doesn't have.
-const OPT_IN_CLIENTS: [Client; 5] = [
+const OPT_IN_CLIENTS: [Client; 6] = [
     Client::Gemini,
     Client::Kiro,
     Client::Windsurf,
     Client::OpenCode,
     Client::VsCode,
+    Client::Zed,
 ];
 
 /// Expands `--client`'s raw string into concrete clients — `"all"` becomes every
@@ -211,7 +215,8 @@ pub struct ClientStatus {
     pub configured: bool,
     pub points_to_expected_binary: bool,
     pub command: Option<String>,
-    pub rule_path: PathBuf,
+    /// `None` for a client with no rule file to install at this scope.
+    pub rule_path: Option<PathBuf>,
     pub rule_installed: bool,
     pub rule_current: bool,
     /// `None` for a client with no hook mechanism to install into.
@@ -340,6 +345,15 @@ fn uninstall_hook(options: &InstallOptions, client: Client) -> Result<Option<(Pa
     Ok(Some((path, changed)))
 }
 
+/// The rule `install`/`uninstall` should touch: none under `--no-rule`, or for a client
+/// with no rule file at this scope.
+fn rule_target(options: &InstallOptions, client: Client) -> Result<Option<RuleTarget>> {
+    if !options.install_rule {
+        return Ok(None);
+    }
+    clients::rule_target(options, client)
+}
+
 pub fn install_clients(options: &InstallOptions) -> Result<InstallReport> {
     let mut report = InstallReport::default();
     for &client in &options.clients {
@@ -350,8 +364,7 @@ pub fn install_clients(options: &InstallOptions) -> Result<InstallReport> {
             report.unchanged.push(path);
         }
 
-        if options.install_rule {
-            let target = clients::rule_target(options, client)?;
+        if let Some(target) = rule_target(options, client)? {
             let rule_changed = install_rule(&target, options.dry_run)?;
             if rule_changed {
                 report.rule_changed.push(target.path);
@@ -383,8 +396,7 @@ pub fn uninstall_clients(options: &InstallOptions) -> Result<InstallReport> {
             report.unchanged.push(path);
         }
 
-        if options.install_rule {
-            let target = clients::rule_target(options, client)?;
+        if let Some(target) = rule_target(options, client)? {
             let rule_changed = uninstall_rule(&target, options.dry_run)?;
             if rule_changed {
                 report.rule_changed.push(target.path);
@@ -436,12 +448,13 @@ pub fn doctor(options: &InstallOptions) -> Result<DoctorReport> {
             command.as_deref() == Some(config_io::path_to_string(&options.binary_path).as_str());
 
         let target = clients::rule_target(options, client)?;
-        let rule_installed = target.path.exists();
-        let rule_current = if rule_installed {
-            let existing = config_io::read_text_file(&target.path)?;
-            existing == expected_rule_text(&target, &existing)
-        } else {
-            false
+        let rule_installed = target.as_ref().is_some_and(|target| target.path.exists());
+        let rule_current = match &target {
+            Some(target) if rule_installed => {
+                let existing = config_io::read_text_file(&target.path)?;
+                existing == expected_rule_text(target, &existing)
+            }
+            _ => false,
         };
 
         let hook_path = clients::hook_target(options, client)?;
@@ -462,7 +475,7 @@ pub fn doctor(options: &InstallOptions) -> Result<DoctorReport> {
             points_to_expected_binary,
             command,
             path,
-            rule_path: target.path,
+            rule_path: target.map(|target| target.path),
             rule_installed,
             rule_current,
             hook_path,

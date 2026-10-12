@@ -25,10 +25,20 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   (`prompts/impact.instructions.md` in the profile, or
   `.github/instructions/impact.instructions.md`). `mcp.json` is edited in place, so
   comments and formatting in it survive install and uninstall.
+- `impact install --client zed` registers the MCP server under `context_servers` in Zed's
+  `settings.json`, keeping its comments. With `--scope project` it also adds the rule as a
+  managed block in the rules file Zed reads for that project (the first of `.rules`,
+  `.cursorrules`, …, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md` that exists, else a new
+  `AGENTS.md`). Zed has no user-level rules file, so a user-scope install adds no rule.
 - `--client all` now also reaches agents beyond the original four, but only those whose
   config directory already exists (`~/.gemini`, `~/.kiro`, `~/.codeium/windsurf`,
-  `~/.config/opencode`, VS Code's user profile), so a default install never creates config folders for tools you
-  don't use.
+  `~/.config/opencode`, VS Code's user profile, Zed's config folder), so a default
+  install never creates config folders for tools you don't use.
+
+### Changed
+
+- `impact doctor --json` reports `rule_path` as `null` for a client with no rule file at
+  the chosen scope (Zed at user scope), and the human output omits its rule line.
 
 ## [0.11.14] - 2026-10-11
 

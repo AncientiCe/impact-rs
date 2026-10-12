@@ -215,7 +215,7 @@ enum Command {
     /// blast radius with it before/after editing code, with local AI coding tools.
     Install {
         /// Client(s) to configure: cursor, codex, claude, claude-desktop, gemini, kiro,
-        /// windsurf, opencode, vscode, or all. `all` reaches the clients after
+        /// windsurf, opencode, vscode, zed, or all. `all` reaches the clients after
         /// claude-desktop only when their config directory already exists.
         #[arg(long, default_value = "all")]
         client: String,
@@ -223,7 +223,7 @@ enum Command {
         #[arg(long, default_value = "user")]
         scope: String,
         /// Project directory for project-scoped config (defaults to the current
-        /// directory). Codex, Claude Code and Windsurf only honor this for their rule file —
+        /// directory). Codex, Claude Code, Windsurf and Zed only honor this for their rule file —
         /// their MCP registration is always user-scoped, by design (see `impact doctor`).
         #[arg(long)]
         path: Option<PathBuf>,
@@ -660,14 +660,16 @@ fn run_doctor(
             if status.configured && !status.points_to_expected_binary {
                 println!("           points at a different binary than this one");
             }
-            let rule_state = if !status.rule_installed {
-                "missing"
-            } else if status.rule_current {
-                "up to date"
-            } else {
-                "present, out of date"
-            };
-            println!("  rule:    {} ({})", status.rule_path.display(), rule_state);
+            if let Some(rule_path) = &status.rule_path {
+                let rule_state = if !status.rule_installed {
+                    "missing"
+                } else if status.rule_current {
+                    "up to date"
+                } else {
+                    "present, out of date"
+                };
+                println!("  rule:    {} ({})", rule_path.display(), rule_state);
+            }
             if let Some(hook_path) = &status.hook_path {
                 let hook_state = if !status.hook_installed {
                     "missing"

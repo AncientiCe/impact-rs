@@ -1290,3 +1290,109 @@ fn client_all_installs_vscode_when_its_user_directory_exists() {
     let report = doctor(home.path(), &[]);
     assert_eq!(client_status(&report, "vscode")["rule_current"], true);
 }
+
+// ---- Zed ----
+
+fn zed_settings_path(home: &Path) -> std::path::PathBuf {
+    if cfg!(target_os = "windows") {
+        home.join("AppData/Roaming/Zed/settings.json")
+    } else {
+        home.join(".config/zed/settings.json")
+    }
+}
+
+fn install_zed_for_project(home: &Path, project: &Path) -> Value {
+    install_client(
+        home,
+        "zed",
+        &["--scope", "project", "--path", project.to_str().unwrap()],
+    )
+}
+
+/// Zed keeps user-level rules in its own database, not a file, so a user-scope install
+/// registers the server and reports no rule at all rather than inventing a file.
+#[test]
+fn install_writes_zed_context_server_and_no_user_rule_file() {
+    let home = tempfile::tempdir().unwrap();
+
+    let report = install_client(home.path(), "zed", &[]);
+
+    let config = read_json(&zed_settings_path(home.path()));
+    let server = &config["context_servers"]["impact"];
+    assert_eq!(server["args"], json!(["mcp"]));
+    assert!(Path::new(server["command"].as_str().unwrap()).is_absolute());
+    assert_eq!(report["rule_changed"], json!([]));
+    assert_eq!(report["rule_unchanged"], json!([]));
+
+    let doctor_report = doctor(home.path(), &["--client", "zed"]);
+    let status = client_status(&doctor_report, "zed");
+    assert_eq!(status["configured"], true);
+    assert_eq!(status["rule_path"], Value::Null);
+}
+
+#[test]
+fn zed_install_keeps_comments_in_settings_json() {
+    let home = tempfile::tempdir().unwrap();
+    let settings = zed_settings_path(home.path());
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    fs::write(
+        &settings,
+        "// Zed settings\n{\n  \"theme\": \"One Dark\", // my theme\n}\n",
+    )
+    .unwrap();
+
+    install_client(home.path(), "zed", &[]);
+    let installed = fs::read_to_string(&settings).unwrap();
+    assert!(installed.contains("// my theme"));
+    assert!(installed.contains("\"context_servers\""));
+
+    uninstall_client(home.path(), "zed", &[]);
+    let uninstalled = fs::read_to_string(&settings).unwrap();
+    assert!(uninstalled.contains("// Zed settings"));
+    assert!(uninstalled.contains("\"theme\": \"One Dark\""));
+    assert!(!uninstalled.contains("\"impact\""));
+}
+
+#[test]
+fn zed_project_scope_creates_agents_md_when_the_project_has_no_rules_file() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+
+    install_zed_for_project(home.path(), project.path());
+
+    let agents_md = fs::read_to_string(project.path().join("AGENTS.md")).unwrap();
+    assert!(agents_md.contains("<!-- BEGIN IMPACT -->"));
+    assert!(zed_settings_path(home.path()).exists());
+}
+
+/// Zed reads only the first rules file it finds (`.rules` before `AGENTS.md`), so the
+/// block has to go into the one Zed will actually read.
+#[test]
+fn zed_project_scope_writes_into_the_rules_file_zed_reads_first() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    fs::write(project.path().join(".rules"), "Use tabs.\n").unwrap();
+    fs::write(project.path().join("AGENTS.md"), "# Agents\n").unwrap();
+
+    install_zed_for_project(home.path(), project.path());
+
+    let rules = fs::read_to_string(project.path().join(".rules")).unwrap();
+    assert!(rules.contains("Use tabs."));
+    assert!(rules.contains("<!-- BEGIN IMPACT -->"));
+    assert_eq!(
+        fs::read_to_string(project.path().join("AGENTS.md")).unwrap(),
+        "# Agents\n"
+    );
+}
+
+#[test]
+fn client_all_installs_zed_when_its_config_directory_exists() {
+    let home = tempfile::tempdir().unwrap();
+    fs::create_dir_all(zed_settings_path(home.path()).parent().unwrap()).unwrap();
+
+    install_client(home.path(), "all", &[]);
+
+    assert!(zed_settings_path(home.path()).exists());
+    let report = doctor(home.path(), &[]);
+    assert_eq!(client_status(&report, "zed")["configured"], true);
+}

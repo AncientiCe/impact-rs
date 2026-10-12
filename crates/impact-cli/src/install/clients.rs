@@ -38,6 +38,8 @@ pub enum JsonLayout {
     OpenCode,
     /// VS Code's `servers.impact` object, which also names the transport (`stdio`).
     VsCode,
+    /// Zed's `context_servers.impact` object in its main `settings.json`.
+    Zed,
 }
 
 pub fn config_format(client: Client) -> ConfigFormat {
@@ -51,6 +53,7 @@ pub fn config_format(client: Client) -> ConfigFormat {
         | Client::Windsurf => ConfigFormat::Json(JsonLayout::McpServers),
         Client::OpenCode => ConfigFormat::Json(JsonLayout::OpenCode),
         Client::VsCode => ConfigFormat::Jsonc(JsonLayout::VsCode),
+        Client::Zed => ConfigFormat::Jsonc(JsonLayout::Zed),
     }
 }
 
@@ -77,7 +80,7 @@ fn scoped_dir(options: &InstallOptions, name: &str) -> Result<PathBuf> {
 
 /// Resolves where the MCP server registration lives for `client`.
 ///
-/// Codex, Claude and Windsurf have no project-scoped MCP registration mechanism in this tool's
+/// Codex, Claude, Windsurf and Zed have no project-scoped MCP registration mechanism in this tool's
 /// v1 design — the whole point of `impact install` is to make the server available in
 /// *every* project automatically, so their MCP entry is always written to the user's
 /// home config regardless of `--scope`. Only their rule file honors `--scope project`
@@ -110,7 +113,42 @@ pub fn config_path(options: &InstallOptions, client: Client) -> Result<PathBuf> 
                 .join(".vscode")
                 .join("mcp.json")),
         },
+        Client::Zed => Ok(zed_config_dir(&options.home_dir).join("settings.json")),
     }
+}
+
+/// Zed's config directory: `%APPDATA%\Zed` on Windows, `~/.config/zed` elsewhere
+/// (macOS included).
+fn zed_config_dir(home_dir: &Path) -> PathBuf {
+    if cfg!(target_os = "windows") {
+        home_dir.join("AppData").join("Roaming").join("Zed")
+    } else {
+        home_dir.join(".config").join("zed")
+    }
+}
+
+/// The project rules files Zed looks for, in its order — it reads only the first one
+/// that exists.
+const ZED_RULE_FILES: [&str; 9] = [
+    ".rules",
+    ".cursorrules",
+    ".windsurfrules",
+    ".clinerules",
+    ".github/copilot-instructions.md",
+    "AGENT.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
+];
+
+/// The rules file Zed will read in `project_dir`: the first of `ZED_RULE_FILES` that
+/// exists, or a new `AGENTS.md` when there is none.
+fn zed_rule_file(project_dir: &Path) -> PathBuf {
+    ZED_RULE_FILES
+        .iter()
+        .map(|name| project_dir.join(name))
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| project_dir.join("AGENTS.md"))
 }
 
 /// VS Code's user-profile directory, derived from `home_dir` like Claude Desktop's config
@@ -145,12 +183,17 @@ pub fn is_present(home_dir: &Path, client: Client) -> bool {
         Client::Windsurf => windsurf_home(home_dir).is_dir(),
         Client::OpenCode => opencode_home(home_dir).is_dir(),
         Client::VsCode => vscode_user_dir(home_dir).is_dir(),
+        Client::Zed => zed_config_dir(home_dir).is_dir(),
         Client::Cursor | Client::Codex | Client::Claude | Client::ClaudeDesktop => true,
     }
 }
 
-pub fn rule_target(options: &InstallOptions, client: Client) -> Result<RuleTarget> {
+/// Where `client`'s rule lives at this scope, or `None` if there is no file to put it
+/// in — Zed keeps user-level rules in its own database, not on disk.
+pub fn rule_target(options: &InstallOptions, client: Client) -> Result<Option<RuleTarget>> {
     let path = match (client, options.scope) {
+        (Client::Zed, Scope::User) => return Ok(None),
+        (Client::Zed, Scope::Project) => zed_rule_file(require_project_dir(options)?),
         (Client::Cursor, Scope::User) => options
             .home_dir
             .join(".cursor")
@@ -210,11 +253,12 @@ pub fn rule_target(options: &InstallOptions, client: Client) -> Result<RuleTarge
             | Client::ClaudeDesktop
             | Client::Gemini
             | Client::Windsurf
-            | Client::OpenCode,
+            | Client::OpenCode
+            | Client::Zed,
             _,
         ) => RuleKind::ManagedBlock,
     };
-    Ok(RuleTarget { path, kind })
+    Ok(Some(RuleTarget { path, kind }))
 }
 
 /// Where `client`'s tool-call hooks live, if `install` wires one in at all. Claude Code
