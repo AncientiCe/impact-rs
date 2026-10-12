@@ -14,6 +14,8 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 use toml_edit::{value, Array, DocumentMut, Item, Table};
 
+use super::clients::JsonLayout;
+
 pub fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
@@ -46,7 +48,7 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))
 }
 
-// ---- JSON (Cursor mcp.json, Claude .claude.json, Claude Desktop config) ----
+// ---- JSON (Cursor mcp.json, Claude .claude.json, OpenCode opencode.json, ...) ----
 
 pub fn read_json_config(path: &Path) -> Result<Value> {
     if !path.exists() {
@@ -60,31 +62,67 @@ pub fn read_json_config(path: &Path) -> Result<Value> {
     serde_json::from_str(&text).with_context(|| format!("failed to parse {}", path.display()))
 }
 
-pub fn ensure_json_server(config: &mut Value, binary_path: &Path) -> Result<()> {
+fn json_servers_key(layout: JsonLayout) -> &'static str {
+    match layout {
+        JsonLayout::McpServers => "mcpServers",
+        JsonLayout::OpenCode => "mcp",
+    }
+}
+
+fn json_server_entry(layout: JsonLayout, binary_path: &Path) -> Value {
+    let binary = path_to_string(binary_path);
+    match layout {
+        JsonLayout::McpServers => json!({ "command": binary, "args": ["mcp"] }),
+        // OpenCode puts the arguments in `command` itself and needs the server type.
+        JsonLayout::OpenCode => {
+            json!({ "type": "local", "command": [binary, "mcp"], "enabled": true })
+        }
+    }
+}
+
+pub fn ensure_json_server(
+    config: &mut Value,
+    layout: JsonLayout,
+    binary_path: &Path,
+) -> Result<()> {
     if !config.is_object() {
         *config = json!({});
     }
     let object = config
         .as_object_mut()
         .ok_or_else(|| anyhow!("JSON config root is not an object"))?;
+    let key = json_servers_key(layout);
     let servers = object
-        .entry("mcpServers")
+        .entry(key)
         .or_insert_with(|| json!({}))
         .as_object_mut()
-        .ok_or_else(|| anyhow!("mcpServers must be a JSON object"))?;
-    servers.insert(
-        "impact".to_string(),
-        json!({ "command": path_to_string(binary_path), "args": ["mcp"] }),
-    );
+        .ok_or_else(|| anyhow!("{key} must be a JSON object"))?;
+    servers.insert("impact".to_string(), json_server_entry(layout, binary_path));
     Ok(())
 }
 
 /// Returns `true` if an `impact` entry was actually present and removed.
-pub fn remove_json_server(config: &mut Value) -> bool {
-    let Some(servers) = config.get_mut("mcpServers").and_then(Value::as_object_mut) else {
+pub fn remove_json_server(config: &mut Value, layout: JsonLayout) -> bool {
+    let Some(servers) = config
+        .get_mut(json_servers_key(layout))
+        .and_then(Value::as_object_mut)
+    else {
         return false;
     };
     servers.remove("impact").is_some()
+}
+
+/// The binary the `impact` entry launches, if there is one.
+pub fn json_server_command(config: &Value, layout: JsonLayout) -> Option<String> {
+    let command = config
+        .get(json_servers_key(layout))
+        .and_then(|servers| servers.get("impact"))
+        .and_then(|server| server.get("command"))?;
+    let binary = match layout {
+        JsonLayout::McpServers => command,
+        JsonLayout::OpenCode => command.get(0)?,
+    };
+    binary.as_str().map(String::from)
 }
 
 /// Writes `next` to `path` if it differs from `existing`, backing up first. Returns

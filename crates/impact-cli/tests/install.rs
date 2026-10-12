@@ -1094,3 +1094,90 @@ fn client_all_installs_windsurf_when_its_home_directory_exists() {
     let report = doctor(home.path(), &[]);
     assert_eq!(client_status(&report, "windsurf")["rule_current"], true);
 }
+
+// ---- OpenCode ----
+
+#[test]
+fn install_writes_opencode_local_mcp_entry_and_agents_md_block() {
+    let home = tempfile::tempdir().unwrap();
+
+    install_client(home.path(), "opencode", &[]);
+
+    let config = read_json(&home.path().join(".config/opencode/opencode.json"));
+    let server = &config["mcp"]["impact"];
+    assert_eq!(server["type"], "local");
+    assert_eq!(server["enabled"], true);
+    let command = server["command"].as_array().unwrap();
+    assert_eq!(command.len(), 2);
+    assert!(Path::new(command[0].as_str().unwrap()).is_absolute());
+    assert_eq!(command[1], "mcp");
+
+    let agents_md = fs::read_to_string(home.path().join(".config/opencode/AGENTS.md")).unwrap();
+    assert!(agents_md.contains("<!-- BEGIN IMPACT -->"));
+}
+
+#[test]
+fn opencode_install_and_uninstall_preserve_unrelated_config() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = home.path().join(".config/opencode");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("opencode.json"),
+        serde_json::to_string_pretty(&json!({
+            "$schema": "https://opencode.ai/config.json",
+            "model": "anthropic/claude-sonnet",
+            "mcp": {"other-tool": {"type": "remote", "url": "https://example.test/mcp"}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    install_client(home.path(), "opencode", &[]);
+    let report = doctor(home.path(), &["--client", "opencode"]);
+    let status = client_status(&report, "opencode");
+    assert_eq!(status["configured"], true);
+    assert_eq!(status["points_to_expected_binary"], true);
+
+    uninstall_client(home.path(), "opencode", &[]);
+
+    let config = read_json(&dir.join("opencode.json"));
+    assert_eq!(config["model"], "anthropic/claude-sonnet");
+    assert_eq!(config["mcp"]["other-tool"]["type"], "remote");
+    assert!(config["mcp"].get("impact").is_none());
+}
+
+#[test]
+fn opencode_project_scope_writes_under_project_dir_only() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+
+    run_ok_json(&[
+        "install",
+        "--client",
+        "opencode",
+        "--scope",
+        "project",
+        "--path",
+        project.path().to_str().unwrap(),
+        "--home-dir",
+        home.path().to_str().unwrap(),
+        "--json",
+    ]);
+
+    let config = read_json(&project.path().join("opencode.json"));
+    assert_eq!(config["mcp"]["impact"]["type"], "local");
+    assert!(project.path().join("AGENTS.md").exists());
+    assert!(!home.path().join(".config/opencode").exists());
+}
+
+#[test]
+fn client_all_installs_opencode_when_its_config_directory_exists() {
+    let home = tempfile::tempdir().unwrap();
+    fs::create_dir_all(home.path().join(".config/opencode")).unwrap();
+
+    install_client(home.path(), "all", &[]);
+
+    assert!(home.path().join(".config/opencode/opencode.json").exists());
+    let report = doctor(home.path(), &[]);
+    assert_eq!(client_status(&report, "opencode")["rule_current"], true);
+}

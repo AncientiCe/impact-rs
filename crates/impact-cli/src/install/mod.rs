@@ -26,6 +26,8 @@ pub enum Client {
     Gemini,
     Kiro,
     Windsurf,
+    #[serde(rename = "opencode")]
+    OpenCode,
 }
 
 impl Client {
@@ -38,6 +40,7 @@ impl Client {
             Client::Gemini => "gemini",
             Client::Kiro => "kiro",
             Client::Windsurf => "windsurf",
+            Client::OpenCode => "opencode",
         }
     }
 }
@@ -54,8 +57,9 @@ impl FromStr for Client {
             "gemini" | "gemini-cli" => Ok(Client::Gemini),
             "kiro" => Ok(Client::Kiro),
             "windsurf" => Ok(Client::Windsurf),
+            "opencode" => Ok(Client::OpenCode),
             other => Err(anyhow!(
-                "unknown MCP client '{other}' (expected cursor, codex, claude, claude-desktop, gemini, kiro, windsurf, or all)"
+                "unknown MCP client '{other}' (expected cursor, codex, claude, claude-desktop, gemini, kiro, windsurf, opencode, or all)"
             )),
         }
     }
@@ -84,7 +88,12 @@ impl FromStr for Scope {
 
 /// Clients `"all"` reaches only when they are already present in `home_dir`, so a
 /// default install doesn't create config directories for agents the user doesn't have.
-const OPT_IN_CLIENTS: [Client; 3] = [Client::Gemini, Client::Kiro, Client::Windsurf];
+const OPT_IN_CLIENTS: [Client; 4] = [
+    Client::Gemini,
+    Client::Kiro,
+    Client::Windsurf,
+    Client::OpenCode,
+];
 
 /// Expands `--client`'s raw string into concrete clients — `"all"` becomes every
 /// client supported on the current platform (Claude Desktop is Windows/macOS only),
@@ -220,10 +229,10 @@ fn install_config(options: &InstallOptions, client: Client) -> Result<(PathBuf, 
             config_io::ensure_toml_server(&mut next, &options.binary_path);
             config_io::write_toml_if_changed(&path, &existing, &next, options.dry_run)?
         }
-        ConfigFormat::McpServersJson => {
+        ConfigFormat::Json(layout) => {
             let existing = config_io::read_json_config(&path)?;
             let mut next = existing.clone();
-            config_io::ensure_json_server(&mut next, &options.binary_path)?;
+            config_io::ensure_json_server(&mut next, layout, &options.binary_path)?;
             config_io::write_json_if_changed(&path, &existing, &next, options.dry_run)?
         }
     };
@@ -245,10 +254,10 @@ fn uninstall_config(options: &InstallOptions, client: Client) -> Result<(PathBuf
                 config_io::write_toml_if_changed(&path, &existing, &next, options.dry_run)?
             }
         }
-        ConfigFormat::McpServersJson => {
+        ConfigFormat::Json(layout) => {
             let existing = config_io::read_json_config(&path)?;
             let mut next = existing.clone();
-            if !config_io::remove_json_server(&mut next) {
+            if !config_io::remove_json_server(&mut next, layout) {
                 false
             } else {
                 config_io::write_json_if_changed(&path, &existing, &next, options.dry_run)?
@@ -390,14 +399,8 @@ fn configured_command(client: Client, path: &std::path::Path) -> Result<Option<S
                 .and_then(|value| value.as_str())
                 .map(String::from)
         }
-        ConfigFormat::McpServersJson => {
-            let config = config_io::read_json_config(path)?;
-            config
-                .get("mcpServers")
-                .and_then(|servers| servers.get("impact"))
-                .and_then(|server| server.get("command"))
-                .and_then(|value| value.as_str())
-                .map(String::from)
+        ConfigFormat::Json(layout) => {
+            config_io::json_server_command(&config_io::read_json_config(path)?, layout)
         }
     };
     Ok(command)

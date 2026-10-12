@@ -21,8 +21,16 @@ pub enum RuleKind {
 pub enum ConfigFormat {
     /// Codex's `config.toml`: an `[mcp_servers.impact]` table.
     CodexToml,
-    /// JSON with an `mcpServers.impact` object — the layout most clients share.
-    McpServersJson,
+    Json(JsonLayout),
+}
+
+/// Where a JSON config keeps its MCP servers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum JsonLayout {
+    /// An `mcpServers.impact` object with `command`/`args` — what most clients share.
+    McpServers,
+    /// OpenCode's `mcp.impact` object, with the arguments inside `command`.
+    OpenCode,
 }
 
 pub fn config_format(client: Client) -> ConfigFormat {
@@ -33,7 +41,8 @@ pub fn config_format(client: Client) -> ConfigFormat {
         | Client::ClaudeDesktop
         | Client::Gemini
         | Client::Kiro
-        | Client::Windsurf => ConfigFormat::McpServersJson,
+        | Client::Windsurf => ConfigFormat::Json(JsonLayout::McpServers),
+        Client::OpenCode => ConfigFormat::Json(JsonLayout::OpenCode),
     }
 }
 
@@ -83,7 +92,17 @@ pub fn config_path(options: &InstallOptions, client: Client) -> Result<PathBuf> 
             .join("settings")
             .join("mcp.json")),
         Client::Windsurf => Ok(windsurf_home(&options.home_dir).join("mcp_config.json")),
+        Client::OpenCode => match options.scope {
+            Scope::User => Ok(opencode_home(&options.home_dir).join("opencode.json")),
+            Scope::Project => Ok(require_project_dir(options)?.join("opencode.json")),
+        },
     }
+}
+
+/// OpenCode reads its global config from `~/.config/opencode` on every platform,
+/// Windows included.
+fn opencode_home(home_dir: &Path) -> PathBuf {
+    home_dir.join(".config").join("opencode")
 }
 
 fn windsurf_home(home_dir: &Path) -> PathBuf {
@@ -97,6 +116,7 @@ pub fn is_present(home_dir: &Path, client: Client) -> bool {
         Client::Gemini => home_dir.join(".gemini").is_dir(),
         Client::Kiro => home_dir.join(".kiro").is_dir(),
         Client::Windsurf => windsurf_home(home_dir).is_dir(),
+        Client::OpenCode => opencode_home(home_dir).is_dir(),
         Client::Cursor | Client::Codex | Client::Claude | Client::ClaudeDesktop => true,
     }
 }
@@ -131,6 +151,8 @@ pub fn rule_target(options: &InstallOptions, client: Client) -> Result<RuleTarge
             .join(".windsurf")
             .join("rules")
             .join("impact.md"),
+        (Client::OpenCode, Scope::User) => opencode_home(&options.home_dir).join("AGENTS.md"),
+        (Client::OpenCode, Scope::Project) => require_project_dir(options)?.join("AGENTS.md"),
     };
     let kind = match (client, options.scope) {
         (Client::Cursor, _) => RuleKind::Standalone {
@@ -147,7 +169,8 @@ pub fn rule_target(options: &InstallOptions, client: Client) -> Result<RuleTarge
             | Client::Claude
             | Client::ClaudeDesktop
             | Client::Gemini
-            | Client::Windsurf,
+            | Client::Windsurf
+            | Client::OpenCode,
             _,
         ) => RuleKind::ManagedBlock,
     };

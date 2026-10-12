@@ -16,9 +16,13 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   `~/.codeium/windsurf/mcp_config.json` and adds the rule as a managed block in Windsurf's
   global rules (`memories/global_rules.md`), or with `--scope project` as an always-on
   workspace rule, `.windsurf/rules/impact.md`.
+- `impact install --client opencode` registers the MCP server as a local server in
+  OpenCode's `~/.config/opencode/opencode.json` (or the project's `opencode.json` with
+  `--scope project`) and adds the rule as a managed block in `AGENTS.md`.
 - `--client all` now also reaches agents beyond the original four, but only those whose
-  home directory already exists (`~/.gemini`, `~/.kiro`, `~/.codeium/windsurf`), so a
-  default install never creates config folders for tools you don't use.
+  config directory already exists (`~/.gemini`, `~/.kiro`, `~/.codeium/windsurf`,
+  `~/.config/opencode`), so a default install never creates config folders for tools you
+  don't use.
 
 ## [0.11.14] - 2026-10-11
 
