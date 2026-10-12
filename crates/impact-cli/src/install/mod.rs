@@ -14,7 +14,7 @@ use std::str::FromStr;
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use clients::{RuleKind, RuleTarget};
+use clients::{ConfigFormat, RuleKind, RuleTarget};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -25,6 +25,7 @@ pub enum Client {
     ClaudeDesktop,
     Gemini,
     Kiro,
+    Windsurf,
 }
 
 impl Client {
@@ -36,6 +37,7 @@ impl Client {
             Client::ClaudeDesktop => "claude-desktop",
             Client::Gemini => "gemini",
             Client::Kiro => "kiro",
+            Client::Windsurf => "windsurf",
         }
     }
 }
@@ -51,8 +53,9 @@ impl FromStr for Client {
             "claude-desktop" => Ok(Client::ClaudeDesktop),
             "gemini" | "gemini-cli" => Ok(Client::Gemini),
             "kiro" => Ok(Client::Kiro),
+            "windsurf" => Ok(Client::Windsurf),
             other => Err(anyhow!(
-                "unknown MCP client '{other}' (expected cursor, codex, claude, claude-desktop, gemini, kiro, or all)"
+                "unknown MCP client '{other}' (expected cursor, codex, claude, claude-desktop, gemini, kiro, windsurf, or all)"
             )),
         }
     }
@@ -81,7 +84,7 @@ impl FromStr for Scope {
 
 /// Clients `"all"` reaches only when they are already present in `home_dir`, so a
 /// default install doesn't create config directories for agents the user doesn't have.
-const OPT_IN_CLIENTS: [Client; 2] = [Client::Gemini, Client::Kiro];
+const OPT_IN_CLIENTS: [Client; 3] = [Client::Gemini, Client::Kiro, Client::Windsurf];
 
 /// Expands `--client`'s raw string into concrete clients — `"all"` becomes every
 /// client supported on the current platform (Claude Desktop is Windows/macOS only),
@@ -210,14 +213,14 @@ pub struct DoctorReport {
 
 fn install_config(options: &InstallOptions, client: Client) -> Result<(PathBuf, bool)> {
     let path = clients::config_path(options, client)?;
-    let changed = match client {
-        Client::Codex => {
+    let changed = match clients::config_format(client) {
+        ConfigFormat::CodexToml => {
             let existing = config_io::read_toml_document(&path)?;
             let mut next = existing.clone();
             config_io::ensure_toml_server(&mut next, &options.binary_path);
             config_io::write_toml_if_changed(&path, &existing, &next, options.dry_run)?
         }
-        Client::Cursor | Client::Claude | Client::ClaudeDesktop | Client::Gemini | Client::Kiro => {
+        ConfigFormat::McpServersJson => {
             let existing = config_io::read_json_config(&path)?;
             let mut next = existing.clone();
             config_io::ensure_json_server(&mut next, &options.binary_path)?;
@@ -232,8 +235,8 @@ fn uninstall_config(options: &InstallOptions, client: Client) -> Result<(PathBuf
     if !path.exists() {
         return Ok((path, false));
     }
-    let changed = match client {
-        Client::Codex => {
+    let changed = match clients::config_format(client) {
+        ConfigFormat::CodexToml => {
             let existing = config_io::read_toml_document(&path)?;
             let mut next = existing.clone();
             if !config_io::remove_toml_server(&mut next) {
@@ -242,7 +245,7 @@ fn uninstall_config(options: &InstallOptions, client: Client) -> Result<(PathBuf
                 config_io::write_toml_if_changed(&path, &existing, &next, options.dry_run)?
             }
         }
-        Client::Cursor | Client::Claude | Client::ClaudeDesktop | Client::Gemini | Client::Kiro => {
+        ConfigFormat::McpServersJson => {
             let existing = config_io::read_json_config(&path)?;
             let mut next = existing.clone();
             if !config_io::remove_json_server(&mut next) {
@@ -378,8 +381,8 @@ pub fn uninstall_clients(options: &InstallOptions) -> Result<InstallReport> {
 }
 
 fn configured_command(client: Client, path: &std::path::Path) -> Result<Option<String>> {
-    let command = match client {
-        Client::Codex => {
+    let command = match clients::config_format(client) {
+        ConfigFormat::CodexToml => {
             let doc = config_io::read_toml_document(path)?;
             doc.get("mcp_servers")
                 .and_then(|servers| servers.get("impact"))
@@ -387,7 +390,7 @@ fn configured_command(client: Client, path: &std::path::Path) -> Result<Option<S
                 .and_then(|value| value.as_str())
                 .map(String::from)
         }
-        Client::Cursor | Client::Claude | Client::ClaudeDesktop | Client::Gemini | Client::Kiro => {
+        ConfigFormat::McpServersJson => {
             let config = config_io::read_json_config(path)?;
             config
                 .get("mcpServers")

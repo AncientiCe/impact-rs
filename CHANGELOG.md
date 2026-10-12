@@ -12,8 +12,12 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 - `impact install --client kiro` registers the MCP server with Kiro
   (`~/.kiro/settings/mcp.json`, or `.kiro/settings/mcp.json` with `--scope project`) and
   writes the rule as an always-included steering file, `.kiro/steering/impact.md`.
+- `impact install --client windsurf` registers the MCP server in
+  `~/.codeium/windsurf/mcp_config.json` and adds the rule as a managed block in Windsurf's
+  global rules (`memories/global_rules.md`), or with `--scope project` as an always-on
+  workspace rule, `.windsurf/rules/impact.md`.
 - `--client all` now also reaches agents beyond the original four, but only those whose
-  home directory already exists (`~/.gemini` for Gemini CLI, `~/.kiro` for Kiro), so a
+  home directory already exists (`~/.gemini`, `~/.kiro`, `~/.codeium/windsurf`), so a
   default install never creates config folders for tools you don't use.
 
 ## [0.11.14] - 2026-10-11

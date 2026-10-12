@@ -80,6 +80,10 @@ pub const CURSOR_FRONT_MATTER: &str =
 /// Kiro's steering front matter: include the file in every interaction.
 pub const KIRO_FRONT_MATTER: &str = "inclusion: always";
 
+/// Windsurf's workspace-rule front matter: include the rule in every Cascade request.
+pub const WINDSURF_FRONT_MATTER: &str = "trigger: always_on
+description: Verify blast radius with impact before/after editing code";
+
 /// A standalone rule file: `front_matter` plus the same body, no HTML markers (`impact`
 /// owns the whole file, so there is nothing else in it to delimit around).
 pub fn standalone_rule_text(front_matter: &str) -> String {

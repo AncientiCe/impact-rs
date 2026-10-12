@@ -1007,3 +1007,90 @@ fn client_all_installs_kiro_when_its_home_directory_exists() {
     let report = doctor(home.path(), &[]);
     assert_eq!(client_status(&report, "kiro")["rule_current"], true);
 }
+
+// ---- Windsurf ----
+
+#[test]
+fn install_writes_windsurf_mcp_config_and_global_rules_block() {
+    let home = tempfile::tempdir().unwrap();
+
+    install_client(home.path(), "windsurf", &[]);
+
+    let config = read_json(&home.path().join(".codeium/windsurf/mcp_config.json"));
+    assert_eq!(config["mcpServers"]["impact"]["args"], json!(["mcp"]));
+
+    let rules = fs::read_to_string(
+        home.path()
+            .join(".codeium/windsurf/memories/global_rules.md"),
+    )
+    .unwrap();
+    assert!(rules.contains("<!-- BEGIN IMPACT -->"));
+    assert!(rules.contains("impact_index"));
+}
+
+#[test]
+fn windsurf_scope_project_moves_only_the_rule_into_an_always_on_rule_file() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+
+    run_ok_json(&[
+        "install",
+        "--client",
+        "windsurf",
+        "--scope",
+        "project",
+        "--path",
+        project.path().to_str().unwrap(),
+        "--home-dir",
+        home.path().to_str().unwrap(),
+        "--json",
+    ]);
+
+    assert!(home
+        .path()
+        .join(".codeium/windsurf/mcp_config.json")
+        .exists());
+    let rule = fs::read_to_string(project.path().join(".windsurf/rules/impact.md")).unwrap();
+    assert!(rule.starts_with("---\ntrigger: always_on\n"));
+    assert!(rule.contains("impact_change"));
+    assert!(!home
+        .path()
+        .join(".codeium/windsurf/memories/global_rules.md")
+        .exists());
+}
+
+#[test]
+fn windsurf_uninstall_keeps_the_users_own_global_rules() {
+    let home = tempfile::tempdir().unwrap();
+    let memories = home.path().join(".codeium/windsurf/memories");
+    fs::create_dir_all(&memories).unwrap();
+    fs::write(
+        memories.join("global_rules.md"),
+        "Always answer in English.\n",
+    )
+    .unwrap();
+    install_client(home.path(), "windsurf", &[]);
+
+    uninstall_client(home.path(), "windsurf", &[]);
+
+    let rules = fs::read_to_string(memories.join("global_rules.md")).unwrap();
+    assert!(rules.contains("Always answer in English."));
+    assert!(!rules.contains("<!-- BEGIN IMPACT -->"));
+    let config = read_json(&home.path().join(".codeium/windsurf/mcp_config.json"));
+    assert!(config["mcpServers"].get("impact").is_none());
+}
+
+#[test]
+fn client_all_installs_windsurf_when_its_home_directory_exists() {
+    let home = tempfile::tempdir().unwrap();
+    fs::create_dir_all(home.path().join(".codeium/windsurf")).unwrap();
+
+    install_client(home.path(), "all", &[]);
+
+    assert!(home
+        .path()
+        .join(".codeium/windsurf/mcp_config.json")
+        .exists());
+    let report = doctor(home.path(), &[]);
+    assert_eq!(client_status(&report, "windsurf")["rule_current"], true);
+}

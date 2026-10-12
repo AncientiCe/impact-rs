@@ -121,8 +121,9 @@ impact uninstall                                 # remove only what impact added
 | Claude Desktop | ✅ | — | — |
 | Gemini CLI | ✅ `.gemini/settings.json` | managed block in `GEMINI.md` | — |
 | Kiro | ✅ `.kiro/settings/mcp.json` | `.kiro/steering/impact.md` | — |
+| Windsurf | ✅ `~/.codeium/windsurf/mcp_config.json` | managed block in `global_rules.md`, or `.windsurf/rules/impact.md` per project | — |
 
-`--client` accepts `cursor`, `codex`, `claude`, `claude-desktop`, `gemini`, `kiro` or `all` (the default). `all` always covers the first four, and adds Gemini CLI and Kiro only when `~/.gemini` or `~/.kiro` already exists, so it never creates config folders for agents you don't use. `--no-rule` and `--no-hook` skip those parts.
+`--client` accepts `cursor`, `codex`, `claude`, `claude-desktop`, `gemini`, `kiro` or `all` (the default). `all` always covers the first four, and adds Gemini CLI, Kiro and Windsurf only when their folder (`~/.gemini`, `~/.kiro`, `~/.codeium/windsurf`) already exists, so it never creates config folders for agents you don't use. Windsurf limits its global rules to 6,000 characters and the impact rule takes about 3,800 of them; if yours don't fit, use `--scope project` instead. `--no-rule` and `--no-hook` skip those parts.
 
 This is the loop the rule and hook set up:
 

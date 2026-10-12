@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 
-use super::rule::{CURSOR_FRONT_MATTER, KIRO_FRONT_MATTER};
+use super::rule::{CURSOR_FRONT_MATTER, KIRO_FRONT_MATTER, WINDSURF_FRONT_MATTER};
 use super::{Client, InstallOptions, Scope};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,6 +14,27 @@ pub enum RuleKind {
     Standalone { front_matter: &'static str },
     /// A delimited block inserted into a file the user may also edit.
     ManagedBlock,
+}
+
+/// How a client's MCP config file is laid out.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConfigFormat {
+    /// Codex's `config.toml`: an `[mcp_servers.impact]` table.
+    CodexToml,
+    /// JSON with an `mcpServers.impact` object — the layout most clients share.
+    McpServersJson,
+}
+
+pub fn config_format(client: Client) -> ConfigFormat {
+    match client {
+        Client::Codex => ConfigFormat::CodexToml,
+        Client::Cursor
+        | Client::Claude
+        | Client::ClaudeDesktop
+        | Client::Gemini
+        | Client::Kiro
+        | Client::Windsurf => ConfigFormat::McpServersJson,
+    }
 }
 
 pub struct RuleTarget {
@@ -39,7 +60,7 @@ fn scoped_dir(options: &InstallOptions, name: &str) -> Result<PathBuf> {
 
 /// Resolves where the MCP server registration lives for `client`.
 ///
-/// Codex and Claude have no project-scoped MCP registration mechanism in this tool's
+/// Codex, Claude and Windsurf have no project-scoped MCP registration mechanism in this tool's
 /// v1 design — the whole point of `impact install` is to make the server available in
 /// *every* project automatically, so their MCP entry is always written to the user's
 /// home config regardless of `--scope`. Only their rule file honors `--scope project`
@@ -61,7 +82,12 @@ pub fn config_path(options: &InstallOptions, client: Client) -> Result<PathBuf> 
         Client::Kiro => Ok(scoped_dir(options, ".kiro")?
             .join("settings")
             .join("mcp.json")),
+        Client::Windsurf => Ok(windsurf_home(&options.home_dir).join("mcp_config.json")),
     }
+}
+
+fn windsurf_home(home_dir: &Path) -> PathBuf {
+    home_dir.join(".codeium").join("windsurf")
 }
 
 /// Whether `client`'s own home directory exists — the signal that the user actually
@@ -70,6 +96,7 @@ pub fn is_present(home_dir: &Path, client: Client) -> bool {
     match client {
         Client::Gemini => home_dir.join(".gemini").is_dir(),
         Client::Kiro => home_dir.join(".kiro").is_dir(),
+        Client::Windsurf => windsurf_home(home_dir).is_dir(),
         Client::Cursor | Client::Codex | Client::Claude | Client::ClaudeDesktop => true,
     }
 }
@@ -95,17 +122,34 @@ pub fn rule_target(options: &InstallOptions, client: Client) -> Result<RuleTarge
         (Client::Kiro, _) => scoped_dir(options, ".kiro")?
             .join("steering")
             .join("impact.md"),
+        // Windsurf has one global rules file shared with the user's own rules, but a
+        // directory of separate rule files per workspace.
+        (Client::Windsurf, Scope::User) => windsurf_home(&options.home_dir)
+            .join("memories")
+            .join("global_rules.md"),
+        (Client::Windsurf, Scope::Project) => require_project_dir(options)?
+            .join(".windsurf")
+            .join("rules")
+            .join("impact.md"),
     };
-    let kind = match client {
-        Client::Cursor => RuleKind::Standalone {
+    let kind = match (client, options.scope) {
+        (Client::Cursor, _) => RuleKind::Standalone {
             front_matter: CURSOR_FRONT_MATTER,
         },
-        Client::Kiro => RuleKind::Standalone {
+        (Client::Kiro, _) => RuleKind::Standalone {
             front_matter: KIRO_FRONT_MATTER,
         },
-        Client::Codex | Client::Claude | Client::ClaudeDesktop | Client::Gemini => {
-            RuleKind::ManagedBlock
-        }
+        (Client::Windsurf, Scope::Project) => RuleKind::Standalone {
+            front_matter: WINDSURF_FRONT_MATTER,
+        },
+        (
+            Client::Codex
+            | Client::Claude
+            | Client::ClaudeDesktop
+            | Client::Gemini
+            | Client::Windsurf,
+            _,
+        ) => RuleKind::ManagedBlock,
     };
     Ok(RuleTarget { path, kind })
 }
