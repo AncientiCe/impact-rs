@@ -80,6 +80,11 @@ pub const CURSOR_FRONT_MATTER: &str =
 /// Kiro's steering front matter: include the file in every interaction.
 pub const KIRO_FRONT_MATTER: &str = "inclusion: always";
 
+/// VS Code's instructions-file front matter: attach the file whenever the agent works on
+/// any file.
+pub const VSCODE_FRONT_MATTER: &str =
+    "description: Verify blast radius with impact before/after editing code\napplyTo: \"**\"";
+
 /// Windsurf's workspace-rule front matter: include the rule in every Cascade request.
 pub const WINDSURF_FRONT_MATTER: &str = "trigger: always_on
 description: Verify blast radius with impact before/after editing code";

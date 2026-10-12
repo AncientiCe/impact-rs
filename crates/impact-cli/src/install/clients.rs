@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 
-use super::rule::{CURSOR_FRONT_MATTER, KIRO_FRONT_MATTER, WINDSURF_FRONT_MATTER};
+use super::rule::{
+    CURSOR_FRONT_MATTER, KIRO_FRONT_MATTER, VSCODE_FRONT_MATTER, WINDSURF_FRONT_MATTER,
+};
 use super::{Client, InstallOptions, Scope};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -21,7 +23,10 @@ pub enum RuleKind {
 pub enum ConfigFormat {
     /// Codex's `config.toml`: an `[mcp_servers.impact]` table.
     CodexToml,
+    /// Plain JSON, parsed and rewritten whole.
     Json(JsonLayout),
+    /// JSON with comments, edited in place so the user's comments and formatting survive.
+    Jsonc(JsonLayout),
 }
 
 /// Where a JSON config keeps its MCP servers.
@@ -31,6 +36,8 @@ pub enum JsonLayout {
     McpServers,
     /// OpenCode's `mcp.impact` object, with the arguments inside `command`.
     OpenCode,
+    /// VS Code's `servers.impact` object, which also names the transport (`stdio`).
+    VsCode,
 }
 
 pub fn config_format(client: Client) -> ConfigFormat {
@@ -43,6 +50,7 @@ pub fn config_format(client: Client) -> ConfigFormat {
         | Client::Kiro
         | Client::Windsurf => ConfigFormat::Json(JsonLayout::McpServers),
         Client::OpenCode => ConfigFormat::Json(JsonLayout::OpenCode),
+        Client::VsCode => ConfigFormat::Jsonc(JsonLayout::VsCode),
     }
 }
 
@@ -96,7 +104,26 @@ pub fn config_path(options: &InstallOptions, client: Client) -> Result<PathBuf> 
             Scope::User => Ok(opencode_home(&options.home_dir).join("opencode.json")),
             Scope::Project => Ok(require_project_dir(options)?.join("opencode.json")),
         },
+        Client::VsCode => match options.scope {
+            Scope::User => Ok(vscode_user_dir(&options.home_dir).join("mcp.json")),
+            Scope::Project => Ok(require_project_dir(options)?
+                .join(".vscode")
+                .join("mcp.json")),
+        },
     }
+}
+
+/// VS Code's user-profile directory, derived from `home_dir` like Claude Desktop's config
+/// so `--home-dir` redirects it too.
+fn vscode_user_dir(home_dir: &Path) -> PathBuf {
+    let base = if cfg!(target_os = "windows") {
+        home_dir.join("AppData").join("Roaming")
+    } else if cfg!(target_os = "macos") {
+        home_dir.join("Library").join("Application Support")
+    } else {
+        home_dir.join(".config")
+    };
+    base.join("Code").join("User")
 }
 
 /// OpenCode reads its global config from `~/.config/opencode` on every platform,
@@ -117,6 +144,7 @@ pub fn is_present(home_dir: &Path, client: Client) -> bool {
         Client::Kiro => home_dir.join(".kiro").is_dir(),
         Client::Windsurf => windsurf_home(home_dir).is_dir(),
         Client::OpenCode => opencode_home(home_dir).is_dir(),
+        Client::VsCode => vscode_user_dir(home_dir).is_dir(),
         Client::Cursor | Client::Codex | Client::Claude | Client::ClaudeDesktop => true,
     }
 }
@@ -153,6 +181,15 @@ pub fn rule_target(options: &InstallOptions, client: Client) -> Result<RuleTarge
             .join("impact.md"),
         (Client::OpenCode, Scope::User) => opencode_home(&options.home_dir).join("AGENTS.md"),
         (Client::OpenCode, Scope::Project) => require_project_dir(options)?.join("AGENTS.md"),
+        // An instructions file of its own rather than a block in
+        // `.github/copilot-instructions.md`, which VS Code only reads behind a setting.
+        (Client::VsCode, Scope::User) => vscode_user_dir(&options.home_dir)
+            .join("prompts")
+            .join("impact.instructions.md"),
+        (Client::VsCode, Scope::Project) => require_project_dir(options)?
+            .join(".github")
+            .join("instructions")
+            .join("impact.instructions.md"),
     };
     let kind = match (client, options.scope) {
         (Client::Cursor, _) => RuleKind::Standalone {
@@ -163,6 +200,9 @@ pub fn rule_target(options: &InstallOptions, client: Client) -> Result<RuleTarge
         },
         (Client::Windsurf, Scope::Project) => RuleKind::Standalone {
             front_matter: WINDSURF_FRONT_MATTER,
+        },
+        (Client::VsCode, _) => RuleKind::Standalone {
+            front_matter: VSCODE_FRONT_MATTER,
         },
         (
             Client::Codex

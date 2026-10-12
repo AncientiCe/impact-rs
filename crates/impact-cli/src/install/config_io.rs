@@ -11,6 +11,8 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
+use jsonc_parser::cst::{CstInputValue, CstRootNode};
+use jsonc_parser::ParseOptions;
 use serde_json::{json, Value};
 use toml_edit::{value, Array, DocumentMut, Item, Table};
 
@@ -66,6 +68,7 @@ fn json_servers_key(layout: JsonLayout) -> &'static str {
     match layout {
         JsonLayout::McpServers => "mcpServers",
         JsonLayout::OpenCode => "mcp",
+        JsonLayout::VsCode => "servers",
     }
 }
 
@@ -77,6 +80,7 @@ fn json_server_entry(layout: JsonLayout, binary_path: &Path) -> Value {
         JsonLayout::OpenCode => {
             json!({ "type": "local", "command": [binary, "mcp"], "enabled": true })
         }
+        JsonLayout::VsCode => json!({ "type": "stdio", "command": binary, "args": ["mcp"] }),
     }
 }
 
@@ -119,10 +123,80 @@ pub fn json_server_command(config: &Value, layout: JsonLayout) -> Option<String>
         .and_then(|servers| servers.get("impact"))
         .and_then(|server| server.get("command"))?;
     let binary = match layout {
-        JsonLayout::McpServers => command,
+        JsonLayout::McpServers | JsonLayout::VsCode => command,
         JsonLayout::OpenCode => command.get(0)?,
     };
     binary.as_str().map(String::from)
+}
+
+// ---- JSONC (VS Code mcp.json, ...) — edited as a syntax tree so comments survive ----
+
+fn parse_jsonc(text: &str) -> Result<CstRootNode> {
+    CstRootNode::parse(text, &ParseOptions::default()).map_err(|error| anyhow!("{error}"))
+}
+
+fn to_cst_input(value: &Value) -> CstInputValue {
+    match value {
+        Value::Null => CstInputValue::Null,
+        Value::Bool(flag) => CstInputValue::Bool(*flag),
+        Value::Number(number) => CstInputValue::Number(number.to_string()),
+        Value::String(text) => CstInputValue::String(text.clone()),
+        Value::Array(items) => CstInputValue::Array(items.iter().map(to_cst_input).collect()),
+        Value::Object(entries) => CstInputValue::Object(
+            entries
+                .iter()
+                .map(|(key, entry)| (key.clone(), to_cst_input(entry)))
+                .collect(),
+        ),
+    }
+}
+
+/// `text` with the `impact` entry added or replaced, everything else left as written.
+pub fn ensure_jsonc_server(text: &str, layout: JsonLayout, binary_path: &Path) -> Result<String> {
+    let root = parse_jsonc(text)?;
+    let key = json_servers_key(layout);
+    let servers = root
+        .object_value_or_set()
+        .object_value_or_create(key)
+        .ok_or_else(|| anyhow!("{key} must be a JSON object"))?;
+    let entry = json_server_entry(layout, binary_path);
+    match servers.get("impact") {
+        Some(existing)
+            if existing.value().and_then(|value| value.to_serde_value()) == Some(entry.clone()) =>
+        {
+            return Ok(text.to_string())
+        }
+        Some(existing) => existing.set_value(to_cst_input(&entry)),
+        None => {
+            servers.append("impact", to_cst_input(&entry));
+        }
+    }
+    let next = root.to_string();
+    Ok(if next.ends_with('\n') {
+        next
+    } else {
+        format!("{next}\n")
+    })
+}
+
+/// `text` without the `impact` entry — unchanged if there was none.
+pub fn remove_jsonc_server(text: &str, layout: JsonLayout) -> Result<String> {
+    let root = parse_jsonc(text)?;
+    let Some(entry) = root
+        .object_value()
+        .and_then(|object| object.object_value(json_servers_key(layout)))
+        .and_then(|servers| servers.get("impact"))
+    else {
+        return Ok(text.to_string());
+    };
+    entry.remove();
+    Ok(root.to_string())
+}
+
+pub fn read_jsonc_config(path: &Path) -> Result<Value> {
+    let root = parse_jsonc(&read_text_file(path)?)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    Ok(root.to_serde_value().unwrap_or_else(|| json!({})))
 }
 
 /// Writes `next` to `path` if it differs from `existing`, backing up first. Returns

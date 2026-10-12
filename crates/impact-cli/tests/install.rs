@@ -1181,3 +1181,112 @@ fn client_all_installs_opencode_when_its_config_directory_exists() {
     let report = doctor(home.path(), &[]);
     assert_eq!(client_status(&report, "opencode")["rule_current"], true);
 }
+
+// ---- VS Code (GitHub Copilot) ----
+
+fn vscode_user_dir(home: &Path) -> std::path::PathBuf {
+    if cfg!(target_os = "windows") {
+        home.join("AppData/Roaming/Code/User")
+    } else if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/Code/User")
+    } else {
+        home.join(".config/Code/User")
+    }
+}
+
+#[test]
+fn install_writes_vscode_user_mcp_json_and_instructions_file() {
+    let home = tempfile::tempdir().unwrap();
+
+    install_client(home.path(), "vscode", &[]);
+
+    let config = read_json(&vscode_user_dir(home.path()).join("mcp.json"));
+    let server = &config["servers"]["impact"];
+    assert_eq!(server["type"], "stdio");
+    assert_eq!(server["args"], json!(["mcp"]));
+    assert!(Path::new(server["command"].as_str().unwrap()).is_absolute());
+
+    let instructions =
+        fs::read_to_string(vscode_user_dir(home.path()).join("prompts/impact.instructions.md"))
+            .unwrap();
+    assert!(instructions.starts_with("---\n"));
+    assert!(instructions.contains("applyTo: \"**\""));
+    assert!(instructions.contains("impact_index"));
+}
+
+#[test]
+fn vscode_project_scope_writes_under_project_dir_only() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+
+    run_ok_json(&[
+        "install",
+        "--client",
+        "vscode",
+        "--scope",
+        "project",
+        "--path",
+        project.path().to_str().unwrap(),
+        "--home-dir",
+        home.path().to_str().unwrap(),
+        "--json",
+    ]);
+
+    let config = read_json(&project.path().join(".vscode/mcp.json"));
+    assert_eq!(config["servers"]["impact"]["type"], "stdio");
+    assert!(project
+        .path()
+        .join(".github/instructions/impact.instructions.md")
+        .exists());
+    assert!(!vscode_user_dir(home.path()).exists());
+}
+
+/// VS Code's `mcp.json` is JSONC: comments in it are the user's, and must survive both
+/// an install and an uninstall.
+#[test]
+fn vscode_install_and_uninstall_keep_comments_and_other_servers() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    fs::create_dir_all(project.path().join(".vscode")).unwrap();
+    let original = "{\n  // servers I added by hand\n  \"servers\": {\n    \"other-tool\": { \"type\": \"stdio\", \"command\": \"other\" }, // keep me\n  },\n}\n";
+    fs::write(project.path().join(".vscode/mcp.json"), original).unwrap();
+    let scope = [
+        "--scope",
+        "project",
+        "--path",
+        project.path().to_str().unwrap(),
+    ];
+
+    install_client(home.path(), "vscode", &scope);
+    let installed = fs::read_to_string(project.path().join(".vscode/mcp.json")).unwrap();
+    assert!(installed.contains("// servers I added by hand"));
+    assert!(installed.contains("// keep me"));
+    assert!(installed.contains("\"impact\""));
+    let second = install_client(home.path(), "vscode", &scope);
+    assert_eq!(second["changed"], json!([]));
+    let mut doctor_args = vec!["--client", "vscode"];
+    doctor_args.extend_from_slice(&scope);
+    let report = doctor(home.path(), &doctor_args);
+    let status = client_status(&report, "vscode");
+    assert_eq!(status["configured"], true);
+    assert_eq!(status["points_to_expected_binary"], true);
+
+    uninstall_client(home.path(), "vscode", &scope);
+
+    let uninstalled = fs::read_to_string(project.path().join(".vscode/mcp.json")).unwrap();
+    assert!(uninstalled.contains("// servers I added by hand"));
+    assert!(uninstalled.contains("\"other-tool\""));
+    assert!(!uninstalled.contains("\"impact\""));
+}
+
+#[test]
+fn client_all_installs_vscode_when_its_user_directory_exists() {
+    let home = tempfile::tempdir().unwrap();
+    fs::create_dir_all(vscode_user_dir(home.path())).unwrap();
+
+    install_client(home.path(), "all", &[]);
+
+    assert!(vscode_user_dir(home.path()).join("mcp.json").exists());
+    let report = doctor(home.path(), &[]);
+    assert_eq!(client_status(&report, "vscode")["rule_current"], true);
+}

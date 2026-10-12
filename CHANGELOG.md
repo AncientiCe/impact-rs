@@ -19,9 +19,15 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 - `impact install --client opencode` registers the MCP server as a local server in
   OpenCode's `~/.config/opencode/opencode.json` (or the project's `opencode.json` with
   `--scope project`) and adds the rule as a managed block in `AGENTS.md`.
+- `impact install --client vscode` registers the MCP server with VS Code (GitHub Copilot)
+  in the user profile's `mcp.json`, or `.vscode/mcp.json` with `--scope project`, and
+  writes the rule as an instructions file applied to every file
+  (`prompts/impact.instructions.md` in the profile, or
+  `.github/instructions/impact.instructions.md`). `mcp.json` is edited in place, so
+  comments and formatting in it survive install and uninstall.
 - `--client all` now also reaches agents beyond the original four, but only those whose
   config directory already exists (`~/.gemini`, `~/.kiro`, `~/.codeium/windsurf`,
-  `~/.config/opencode`), so a default install never creates config folders for tools you
+  `~/.config/opencode`, VS Code's user profile), so a default install never creates config folders for tools you
   don't use.
 
 ## [0.11.14] - 2026-10-11

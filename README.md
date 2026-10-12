@@ -8,7 +8,7 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
   <img alt="Platforms: Linux, macOS, Windows" src="https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-informational">
   <img alt="Rust 1.82+" src="https://img.shields.io/badge/rust-1.82%2B-orange?logo=rust">
-  <img alt="Works with Claude Code, Codex, Cursor, Gemini CLI, Kiro, Windsurf and OpenCode" src="https://img.shields.io/badge/works%20with-Claude%20Code%20%7C%20Codex%20%7C%20Cursor%20%7C%20Gemini%20CLI%20%7C%20Kiro%20%7C%20Windsurf%20%7C%20OpenCode-8A2BE2">
+  <img alt="Works with Claude Code, Codex, Cursor, VS Code, Gemini CLI, Kiro, Windsurf and OpenCode" src="https://img.shields.io/badge/works%20with-Claude%20Code%20%7C%20Codex%20%7C%20Cursor%20%7C%20VS%20Code%20%7C%20Gemini%20CLI%20%7C%20Kiro%20%7C%20Windsurf%20%7C%20OpenCode-8A2BE2">
 </p>
 
 <p align="center">
@@ -122,9 +122,10 @@ impact uninstall                                 # remove only what impact added
 | Gemini CLI | ✅ `.gemini/settings.json` | managed block in `GEMINI.md` | — |
 | Kiro | ✅ `.kiro/settings/mcp.json` | `.kiro/steering/impact.md` | — |
 | OpenCode | ✅ `opencode.json` | managed block in `AGENTS.md` | — |
+| VS Code (Copilot) | ✅ `mcp.json` (user profile or `.vscode/`) | `impact.instructions.md` (user `prompts/` or `.github/instructions/`) | — |
 | Windsurf | ✅ `~/.codeium/windsurf/mcp_config.json` | managed block in `global_rules.md`, or `.windsurf/rules/impact.md` per project | — |
 
-`--client` accepts `cursor`, `codex`, `claude`, `claude-desktop`, `gemini`, `kiro`, `windsurf`, `opencode` or `all` (the default). `all` always covers the first four, and adds Gemini CLI, Kiro, Windsurf and OpenCode only when their folder (`~/.gemini`, `~/.kiro`, `~/.codeium/windsurf`, `~/.config/opencode`) already exists, so it never creates config folders for agents you don't use. Windsurf limits its global rules to 6,000 characters and the impact rule takes about 3,800 of them; if yours don't fit, use `--scope project` instead. `--no-rule` and `--no-hook` skip those parts.
+`--client` accepts `cursor`, `codex`, `claude`, `claude-desktop`, `gemini`, `kiro`, `windsurf`, `opencode`, `vscode` or `all` (the default). `all` always covers the first four, and adds Gemini CLI, Kiro, Windsurf, OpenCode and VS Code only when their folder (`~/.gemini`, `~/.kiro`, `~/.codeium/windsurf`, `~/.config/opencode`, VS Code's user profile) already exists, so it never creates config folders for agents you don't use. Windsurf limits its global rules to 6,000 characters and the impact rule takes about 3,800 of them; if yours don't fit, use `--scope project` instead. `--no-rule` and `--no-hook` skip those parts.
 
 This is the loop the rule and hook set up:
 

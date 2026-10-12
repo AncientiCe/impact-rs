@@ -28,6 +28,8 @@ pub enum Client {
     Windsurf,
     #[serde(rename = "opencode")]
     OpenCode,
+    #[serde(rename = "vscode")]
+    VsCode,
 }
 
 impl Client {
@@ -41,6 +43,7 @@ impl Client {
             Client::Kiro => "kiro",
             Client::Windsurf => "windsurf",
             Client::OpenCode => "opencode",
+            Client::VsCode => "vscode",
         }
     }
 }
@@ -58,8 +61,9 @@ impl FromStr for Client {
             "kiro" => Ok(Client::Kiro),
             "windsurf" => Ok(Client::Windsurf),
             "opencode" => Ok(Client::OpenCode),
+            "vscode" | "vs-code" | "copilot" => Ok(Client::VsCode),
             other => Err(anyhow!(
-                "unknown MCP client '{other}' (expected cursor, codex, claude, claude-desktop, gemini, kiro, windsurf, opencode, or all)"
+                "unknown MCP client '{other}' (expected cursor, codex, claude, claude-desktop, gemini, kiro, windsurf, opencode, vscode, or all)"
             )),
         }
     }
@@ -88,11 +92,12 @@ impl FromStr for Scope {
 
 /// Clients `"all"` reaches only when they are already present in `home_dir`, so a
 /// default install doesn't create config directories for agents the user doesn't have.
-const OPT_IN_CLIENTS: [Client; 4] = [
+const OPT_IN_CLIENTS: [Client; 5] = [
     Client::Gemini,
     Client::Kiro,
     Client::Windsurf,
     Client::OpenCode,
+    Client::VsCode,
 ];
 
 /// Expands `--client`'s raw string into concrete clients — `"all"` becomes every
@@ -235,6 +240,12 @@ fn install_config(options: &InstallOptions, client: Client) -> Result<(PathBuf, 
             config_io::ensure_json_server(&mut next, layout, &options.binary_path)?;
             config_io::write_json_if_changed(&path, &existing, &next, options.dry_run)?
         }
+        ConfigFormat::Jsonc(layout) => {
+            let existing = config_io::read_text_file(&path)?;
+            let next = config_io::ensure_jsonc_server(&existing, layout, &options.binary_path)
+                .with_context(|| format!("failed to parse {}", path.display()))?;
+            config_io::write_text_if_changed(&path, &existing, &next, options.dry_run)?
+        }
     };
     Ok((path, changed))
 }
@@ -262,6 +273,12 @@ fn uninstall_config(options: &InstallOptions, client: Client) -> Result<(PathBuf
             } else {
                 config_io::write_json_if_changed(&path, &existing, &next, options.dry_run)?
             }
+        }
+        ConfigFormat::Jsonc(layout) => {
+            let existing = config_io::read_text_file(&path)?;
+            let next = config_io::remove_jsonc_server(&existing, layout)
+                .with_context(|| format!("failed to parse {}", path.display()))?;
+            config_io::write_text_if_changed(&path, &existing, &next, options.dry_run)?
         }
     };
     Ok((path, changed))
@@ -401,6 +418,10 @@ fn configured_command(client: Client, path: &std::path::Path) -> Result<Option<S
         }
         ConfigFormat::Json(layout) => {
             config_io::json_server_command(&config_io::read_json_config(path)?, layout)
+        }
+        ConfigFormat::Jsonc(layout) => {
+            let config = config_io::read_jsonc_config(path)?;
+            config_io::json_server_command(&config, layout)
         }
     };
     Ok(command)

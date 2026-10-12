@@ -215,9 +215,8 @@ enum Command {
     /// blast radius with it before/after editing code, with local AI coding tools.
     Install {
         /// Client(s) to configure: cursor, codex, claude, claude-desktop, gemini, kiro,
-        /// windsurf, opencode, or all. `all` reaches gemini, kiro, windsurf and opencode
-        /// only when their config directory (`~/.gemini`, `~/.kiro`, `~/.codeium/windsurf`,
-        /// `~/.config/opencode`) exists.
+        /// windsurf, opencode, vscode, or all. `all` reaches the clients after
+        /// claude-desktop only when their config directory already exists.
         #[arg(long, default_value = "all")]
         client: String,
         /// Config scope: user (global — works in every project) or project.

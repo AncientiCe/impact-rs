@@ -440,6 +440,7 @@ dependencies = [
  "impact-lang-rust",
  "impact-lang-swift",
  "impact-lang-ts",
+ "jsonc-parser",
  "predicates",
  "rusqlite",
  "serde",
@@ -566,6 +567,15 @@ name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
+
+[[package]]
+name = "jsonc-parser"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ecded084f9b9a718d39668a42657c32253663d1f6afb3fbb9134f0305f73f48"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "libc"
