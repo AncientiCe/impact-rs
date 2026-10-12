@@ -9,9 +9,12 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 - `impact install --client gemini` registers the MCP server with Gemini CLI
   (`~/.gemini/settings.json`, or `.gemini/settings.json` with `--scope project`) and adds
   the rule as a managed block in `GEMINI.md`. `uninstall` and `doctor` cover it too.
+- `impact install --client kiro` registers the MCP server with Kiro
+  (`~/.kiro/settings/mcp.json`, or `.kiro/settings/mcp.json` with `--scope project`) and
+  writes the rule as an always-included steering file, `.kiro/steering/impact.md`.
 - `--client all` now also reaches agents beyond the original four, but only those whose
-  home directory already exists (`~/.gemini` for Gemini CLI), so a default install never
-  creates config folders for tools you don't use.
+  home directory already exists (`~/.gemini` for Gemini CLI, `~/.kiro` for Kiro), so a
+  default install never creates config folders for tools you don't use.
 
 ## [0.11.14] - 2026-10-11
 

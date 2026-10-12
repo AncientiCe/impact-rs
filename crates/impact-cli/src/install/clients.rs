@@ -4,12 +4,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 
+use super::rule::{CURSOR_FRONT_MATTER, KIRO_FRONT_MATTER};
 use super::{Client, InstallOptions, Scope};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuleKind {
-    /// Cursor's `.mdc` file: entirely owned by `impact` (written/deleted whole).
-    Standalone,
+    /// A file entirely owned by `impact` (written/deleted whole) — Cursor's `.mdc`, Kiro's
+    /// steering file — opening with the client's own front matter.
+    Standalone { front_matter: &'static str },
     /// A delimited block inserted into a file the user may also edit.
     ManagedBlock,
 }
@@ -26,13 +28,23 @@ fn require_project_dir(options: &InstallOptions) -> Result<&Path> {
         .ok_or_else(|| anyhow!("--path is required for project-scope installs"))
 }
 
+/// A client's dot-directory (`.gemini`, `.kiro`) — in the home directory for user scope,
+/// in the project for project scope.
+fn scoped_dir(options: &InstallOptions, name: &str) -> Result<PathBuf> {
+    match options.scope {
+        Scope::User => Ok(options.home_dir.join(name)),
+        Scope::Project => Ok(require_project_dir(options)?.join(name)),
+    }
+}
+
 /// Resolves where the MCP server registration lives for `client`.
 ///
 /// Codex and Claude have no project-scoped MCP registration mechanism in this tool's
 /// v1 design — the whole point of `impact install` is to make the server available in
 /// *every* project automatically, so their MCP entry is always written to the user's
 /// home config regardless of `--scope`. Only their rule file honors `--scope project`
-/// (see `rule_target`). Cursor's `mcp.json` is genuinely scope-sensitive.
+/// (see `rule_target`). Cursor's, Gemini CLI's and Kiro's configs are genuinely
+/// scope-sensitive.
 pub fn config_path(options: &InstallOptions, client: Client) -> Result<PathBuf> {
     match client {
         Client::Cursor => match options.scope {
@@ -45,12 +57,10 @@ pub fn config_path(options: &InstallOptions, client: Client) -> Result<PathBuf> 
         // Claude Code CLI reads `~/.claude.json` — a file, not a `~/.claude/` directory.
         Client::Claude => Ok(options.home_dir.join(".claude.json")),
         Client::ClaudeDesktop => claude_desktop_config_path(&options.home_dir),
-        Client::Gemini => match options.scope {
-            Scope::User => Ok(options.home_dir.join(".gemini").join("settings.json")),
-            Scope::Project => Ok(require_project_dir(options)?
-                .join(".gemini")
-                .join("settings.json")),
-        },
+        Client::Gemini => Ok(scoped_dir(options, ".gemini")?.join("settings.json")),
+        Client::Kiro => Ok(scoped_dir(options, ".kiro")?
+            .join("settings")
+            .join("mcp.json")),
     }
 }
 
@@ -59,6 +69,7 @@ pub fn config_path(options: &InstallOptions, client: Client) -> Result<PathBuf> 
 pub fn is_present(home_dir: &Path, client: Client) -> bool {
     match client {
         Client::Gemini => home_dir.join(".gemini").is_dir(),
+        Client::Kiro => home_dir.join(".kiro").is_dir(),
         Client::Cursor | Client::Codex | Client::Claude | Client::ClaudeDesktop => true,
     }
 }
@@ -81,9 +92,17 @@ pub fn rule_target(options: &InstallOptions, client: Client) -> Result<RuleTarge
         (Client::ClaudeDesktop, _) => options.home_dir.join(".claude").join("CLAUDE.md"),
         (Client::Gemini, Scope::User) => options.home_dir.join(".gemini").join("GEMINI.md"),
         (Client::Gemini, Scope::Project) => require_project_dir(options)?.join("GEMINI.md"),
+        (Client::Kiro, _) => scoped_dir(options, ".kiro")?
+            .join("steering")
+            .join("impact.md"),
     };
     let kind = match client {
-        Client::Cursor => RuleKind::Standalone,
+        Client::Cursor => RuleKind::Standalone {
+            front_matter: CURSOR_FRONT_MATTER,
+        },
+        Client::Kiro => RuleKind::Standalone {
+            front_matter: KIRO_FRONT_MATTER,
+        },
         Client::Codex | Client::Claude | Client::ClaudeDesktop | Client::Gemini => {
             RuleKind::ManagedBlock
         }

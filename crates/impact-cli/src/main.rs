@@ -214,8 +214,9 @@ enum Command {
     /// Register the impact MCP server, and an agent rule telling the agent to verify
     /// blast radius with it before/after editing code, with local AI coding tools.
     Install {
-        /// Client(s) to configure: cursor, codex, claude, claude-desktop, gemini, or all.
-        /// `all` reaches gemini only when its home directory (`~/.gemini`) exists.
+        /// Client(s) to configure: cursor, codex, claude, claude-desktop, gemini, kiro, or
+        /// all. `all` reaches gemini and kiro only when their home directory
+        /// (`~/.gemini`, `~/.kiro`) exists.
         #[arg(long, default_value = "all")]
         client: String,
         /// Config scope: user (global — works in every project) or project.

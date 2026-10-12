@@ -1,7 +1,7 @@
 //! Agent-rule content: the text telling an AI coding agent to call `impact`'s MCP tools
 //! before/after editing code, plus the pure string operations that install it either as
-//! a standalone file (Cursor) or as a managed block inside a shared file the user may
-//! also edit (Codex's `AGENTS.md`, Claude's `CLAUDE.md`).
+//! a standalone file (Cursor's `.mdc`, Kiro's steering file) or as a managed block inside
+//! a shared file the user may also edit (Codex's `AGENTS.md`, Claude's `CLAUDE.md`).
 
 pub const RULE_BEGIN: &str = "<!-- BEGIN IMPACT -->";
 pub const RULE_END: &str = "<!-- END IMPACT -->";
@@ -73,12 +73,17 @@ pub fn managed_rule_block() -> String {
     format!("{RULE_BEGIN}\n{RULE_BODY}\n{RULE_END}")
 }
 
-/// Cursor's standalone rule file: frontmatter plus the same body, no HTML markers
-/// (Cursor owns the whole file, so there is nothing else in it to delimit around).
-pub fn cursor_rule_text() -> String {
-    format!(
-        "---\ndescription: Verify blast radius with impact before/after editing code\nalwaysApply: true\n---\n\n{RULE_BODY}\n"
-    )
+/// Cursor's front matter: apply the rule to every request, not only on a file match.
+pub const CURSOR_FRONT_MATTER: &str =
+    "description: Verify blast radius with impact before/after editing code\nalwaysApply: true";
+
+/// Kiro's steering front matter: include the file in every interaction.
+pub const KIRO_FRONT_MATTER: &str = "inclusion: always";
+
+/// A standalone rule file: `front_matter` plus the same body, no HTML markers (`impact`
+/// owns the whole file, so there is nothing else in it to delimit around).
+pub fn standalone_rule_text(front_matter: &str) -> String {
+    format!("---\n{front_matter}\n---\n\n{RULE_BODY}\n")
 }
 
 /// Locate the managed block's byte range `[start, end)`, markers included.

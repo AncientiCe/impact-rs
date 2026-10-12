@@ -933,3 +933,77 @@ fn client_all_installs_agents_whose_home_directory_exists() {
     assert_eq!(gemini["configured"], true);
     assert_eq!(gemini["rule_current"], true);
 }
+
+// ---- Kiro ----
+
+#[test]
+fn install_writes_kiro_mcp_entry_and_always_on_steering_file() {
+    let home = tempfile::tempdir().unwrap();
+
+    install_client(home.path(), "kiro", &[]);
+
+    let config = read_json(&home.path().join(".kiro/settings/mcp.json"));
+    assert_eq!(config["mcpServers"]["impact"]["args"], json!(["mcp"]));
+
+    let steering = fs::read_to_string(home.path().join(".kiro/steering/impact.md")).unwrap();
+    assert!(steering.starts_with("---\ninclusion: always\n---\n"));
+    assert!(steering.contains("impact_change"));
+    assert!(!steering.contains("<!-- BEGIN IMPACT -->"));
+}
+
+#[test]
+fn kiro_project_scope_writes_under_project_dir_only() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+
+    run_ok_json(&[
+        "install",
+        "--client",
+        "kiro",
+        "--scope",
+        "project",
+        "--path",
+        project.path().to_str().unwrap(),
+        "--home-dir",
+        home.path().to_str().unwrap(),
+        "--json",
+    ]);
+
+    assert!(project.path().join(".kiro/settings/mcp.json").exists());
+    assert!(project.path().join(".kiro/steering/impact.md").exists());
+    assert!(!home.path().join(".kiro").exists());
+}
+
+#[test]
+fn kiro_uninstall_removes_steering_file_and_only_the_impact_entry() {
+    let home = tempfile::tempdir().unwrap();
+    fs::create_dir_all(home.path().join(".kiro/settings")).unwrap();
+    fs::write(
+        home.path().join(".kiro/settings/mcp.json"),
+        serde_json::to_string_pretty(&json!({
+            "mcpServers": {"other-tool": {"command": "other"}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    install_client(home.path(), "kiro", &[]);
+
+    uninstall_client(home.path(), "kiro", &[]);
+
+    let config = read_json(&home.path().join(".kiro/settings/mcp.json"));
+    assert_eq!(config["mcpServers"]["other-tool"]["command"], "other");
+    assert!(config["mcpServers"].get("impact").is_none());
+    assert!(!home.path().join(".kiro/steering/impact.md").exists());
+}
+
+#[test]
+fn client_all_installs_kiro_when_its_home_directory_exists() {
+    let home = tempfile::tempdir().unwrap();
+    fs::create_dir_all(home.path().join(".kiro")).unwrap();
+
+    install_client(home.path(), "all", &[]);
+
+    assert!(home.path().join(".kiro/settings/mcp.json").exists());
+    let report = doctor(home.path(), &[]);
+    assert_eq!(client_status(&report, "kiro")["rule_current"], true);
+}

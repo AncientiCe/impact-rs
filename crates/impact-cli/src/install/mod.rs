@@ -24,6 +24,7 @@ pub enum Client {
     Claude,
     ClaudeDesktop,
     Gemini,
+    Kiro,
 }
 
 impl Client {
@@ -34,6 +35,7 @@ impl Client {
             Client::Claude => "claude",
             Client::ClaudeDesktop => "claude-desktop",
             Client::Gemini => "gemini",
+            Client::Kiro => "kiro",
         }
     }
 }
@@ -48,8 +50,9 @@ impl FromStr for Client {
             "claude" | "claude-code" => Ok(Client::Claude),
             "claude-desktop" => Ok(Client::ClaudeDesktop),
             "gemini" | "gemini-cli" => Ok(Client::Gemini),
+            "kiro" => Ok(Client::Kiro),
             other => Err(anyhow!(
-                "unknown MCP client '{other}' (expected cursor, codex, claude, claude-desktop, gemini, or all)"
+                "unknown MCP client '{other}' (expected cursor, codex, claude, claude-desktop, gemini, kiro, or all)"
             )),
         }
     }
@@ -78,7 +81,7 @@ impl FromStr for Scope {
 
 /// Clients `"all"` reaches only when they are already present in `home_dir`, so a
 /// default install doesn't create config directories for agents the user doesn't have.
-const OPT_IN_CLIENTS: [Client; 1] = [Client::Gemini];
+const OPT_IN_CLIENTS: [Client; 2] = [Client::Gemini, Client::Kiro];
 
 /// Expands `--client`'s raw string into concrete clients — `"all"` becomes every
 /// client supported on the current platform (Claude Desktop is Windows/macOS only),
@@ -214,7 +217,7 @@ fn install_config(options: &InstallOptions, client: Client) -> Result<(PathBuf, 
             config_io::ensure_toml_server(&mut next, &options.binary_path);
             config_io::write_toml_if_changed(&path, &existing, &next, options.dry_run)?
         }
-        Client::Cursor | Client::Claude | Client::ClaudeDesktop | Client::Gemini => {
+        Client::Cursor | Client::Claude | Client::ClaudeDesktop | Client::Gemini | Client::Kiro => {
             let existing = config_io::read_json_config(&path)?;
             let mut next = existing.clone();
             config_io::ensure_json_server(&mut next, &options.binary_path)?;
@@ -239,7 +242,7 @@ fn uninstall_config(options: &InstallOptions, client: Client) -> Result<(PathBuf
                 config_io::write_toml_if_changed(&path, &existing, &next, options.dry_run)?
             }
         }
-        Client::Cursor | Client::Claude | Client::ClaudeDesktop | Client::Gemini => {
+        Client::Cursor | Client::Claude | Client::ClaudeDesktop | Client::Gemini | Client::Kiro => {
             let existing = config_io::read_json_config(&path)?;
             let mut next = existing.clone();
             if !config_io::remove_json_server(&mut next) {
@@ -254,7 +257,7 @@ fn uninstall_config(options: &InstallOptions, client: Client) -> Result<(PathBuf
 
 fn expected_rule_text(target: &RuleTarget, existing: &str) -> String {
     match target.kind {
-        RuleKind::Standalone => rule::cursor_rule_text(),
+        RuleKind::Standalone { front_matter } => rule::standalone_rule_text(front_matter),
         RuleKind::ManagedBlock => rule::upsert_managed_rule(existing),
     }
 }
@@ -267,7 +270,7 @@ fn install_rule(target: &RuleTarget, dry_run: bool) -> Result<bool> {
 
 fn uninstall_rule(target: &RuleTarget, dry_run: bool) -> Result<bool> {
     match target.kind {
-        RuleKind::Standalone => config_io::remove_file_if_exists(&target.path, dry_run),
+        RuleKind::Standalone { .. } => config_io::remove_file_if_exists(&target.path, dry_run),
         RuleKind::ManagedBlock => {
             if !target.path.exists() {
                 return Ok(false);
@@ -384,7 +387,7 @@ fn configured_command(client: Client, path: &std::path::Path) -> Result<Option<S
                 .and_then(|value| value.as_str())
                 .map(String::from)
         }
-        Client::Cursor | Client::Claude | Client::ClaudeDesktop | Client::Gemini => {
+        Client::Cursor | Client::Claude | Client::ClaudeDesktop | Client::Gemini | Client::Kiro => {
             let config = config_io::read_json_config(path)?;
             config
                 .get("mcpServers")
