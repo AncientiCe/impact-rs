@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-10-15
+
 ### Fixed
 
 - TypeScript: an import of a name a module exports under an alias
