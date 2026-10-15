@@ -131,6 +131,23 @@ impl Reexports {
         }
         found
     }
+
+    /// Whether the file `module` names exports some other symbol under `name`
+    /// (`export { other as name }`, with or without `from`).
+    fn renames(&self, module: &str, name: &str) -> bool {
+        let wanted: Vec<&str> = module.split("::").filter(|s| !s.is_empty()).collect();
+        let Some(candidates) = wanted.last().and_then(|last| self.by_segment.get(*last)) else {
+            return false;
+        };
+        candidates.iter().map(|&i| &self.all[i]).any(|r| {
+            r.name == name
+                && r.origin.as_deref().is_some_and(|origin| origin != name)
+                && r.barrel
+                    .iter()
+                    .map(String::as_str)
+                    .eq(wanted.iter().copied())
+        })
+    }
 }
 
 impl<'g> Resolver<'g> {
@@ -248,10 +265,13 @@ impl<'g> Resolver<'g> {
             // information than the name itself — resolve it structurally.
             RefTarget::Module(module) if module.is_empty() => self.resolve(&r.to_name),
             RefTarget::Module(module) => {
-                let mut ids = self.in_module(module, &r.to_name);
-                if ids.is_empty() && r.to_name != MODULE_SCOPE {
-                    ids = self.in_module_via_reexports(module, &r.to_name, &mut Vec::new());
-                }
+                // Inside the file a name was declared in, it means that declaration; only
+                // an importer sees the file's export list (`export { scheduled as inner }`).
+                let ids = if within_module(&r.from_qualified_path, module) {
+                    self.declared_in(module, &r.to_name, &mut Vec::new())
+                } else {
+                    self.exported_from(module, &r.to_name, &mut Vec::new())
+                };
                 if ids.is_empty() {
                     // The import resolved somewhere outside this project (a dependency, a
                     // standard-library module). Dropping the edge is right: inventing a
@@ -353,6 +373,37 @@ impl<'g> Resolver<'g> {
         matched
     }
 
+    /// What an import of `name` from `module` reaches. A module that renames something
+    /// on export (`export { scheduled as inner }`, or `export { a as inner } from`) binds
+    /// the name to that, whatever else in it is called `inner` — an unexported local of
+    /// that name is unreachable from outside. Otherwise it is the module's own `name`,
+    /// then whatever a barrel passes through under it.
+    fn exported_from(
+        &self,
+        module: &str,
+        name: &str,
+        seen: &mut Vec<(String, String)>,
+    ) -> Vec<NodeId> {
+        if name != MODULE_SCOPE && self.reexports.renames(module, name) {
+            return self.in_module_via_reexports(module, name, seen);
+        }
+        self.declared_in(module, name, seen)
+    }
+
+    /// The module's own `name`, or failing that whatever a barrel passes through under it.
+    fn declared_in(
+        &self,
+        module: &str,
+        name: &str,
+        seen: &mut Vec<(String, String)>,
+    ) -> Vec<NodeId> {
+        let ids = self.in_module(module, name);
+        if !ids.is_empty() || name == MODULE_SCOPE {
+            return ids;
+        }
+        self.in_module_via_reexports(module, name, seen)
+    }
+
     /// `in_module`'s answer when `module` is a barrel: the symbols `name` resolves to
     /// through the `export { name } from` / `export * from` statements of the file an
     /// import of `module` loads, followed through barrels of barrels. `seen` holds the
@@ -407,14 +458,16 @@ impl<'g> Resolver<'g> {
         let mut found = Vec::new();
         for reexport in barrels {
             let origin = reexport.origin.as_deref().unwrap_or(name);
-            let mut ids = if origin == "default" {
-                self.in_module_default(&reexport.module)
+            let ids = if origin == "default" {
+                let ids = self.in_module_default(&reexport.module);
+                if ids.is_empty() {
+                    self.in_module_via_reexports(&reexport.module, origin, seen)
+                } else {
+                    ids
+                }
             } else {
-                self.in_module(&reexport.module, origin)
+                self.exported_from(&reexport.module, origin, seen)
             };
-            if ids.is_empty() {
-                ids = self.in_module_via_reexports(&reexport.module, origin, seen);
-            }
             for id in ids {
                 if !found.contains(&id) {
                     found.push(id);
@@ -469,6 +522,15 @@ impl<'g> Resolver<'g> {
             .map(|(_, id)| id.clone())
             .collect()
     }
+}
+
+/// Whether `path` is a symbol of `module` itself: `module`'s segments start it.
+fn within_module(path: &str, module: &str) -> bool {
+    let mut segments = path.split("::");
+    module
+        .split("::")
+        .filter(|s| !s.is_empty())
+        .all(|wanted| segments.next() == Some(wanted))
 }
 
 /// A module-scope node's path segments minus the trailing `<module>`: the file's own

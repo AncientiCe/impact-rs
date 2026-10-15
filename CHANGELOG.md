@@ -4,6 +4,13 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- TypeScript: an import of a name a module exports under an alias
+  (`export { scheduled as inner }`) now reaches the aliased function, not an unexported
+  local that happens to share the public name. Calls inside the module still reach its own
+  declaration. ([#13](https://github.com/AncientiCe/impact-rs/issues/13))
+
 ## [0.12.0] - 2026-10-12
 
 ### Added

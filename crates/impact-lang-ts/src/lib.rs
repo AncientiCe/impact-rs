@@ -476,9 +476,25 @@ fn module_imports(
         if statement.children(&mut inner).any(|c| c.kind() == "type") {
             continue;
         }
-        let Some(module) = statement
-            .child_by_field_name("source")
-            .and_then(|s| ts_string_text(s, source))
+        let Some(specifier) = statement.child_by_field_name("source") else {
+            // `export { scheduled as inner }`: this file re-exports its own `scheduled`
+            // under the name `inner`, so it is a barrel of itself for that name. Only a
+            // renamed specifier needs this; `export { foo }` is found under its own name.
+            if statement.kind() == "export_statement" {
+                for name in reexported_names(statement, source) {
+                    if name.contains(" as ") {
+                        out.push(RefDecl {
+                            from_qualified_path: from.clone(),
+                            to_name: name,
+                            kind: EdgeKind::Imports,
+                            to_target: RefTarget::Module(prefix.to_string()),
+                        });
+                    }
+                }
+            }
+            continue;
+        };
+        let Some(module) = ts_string_text(specifier, source)
             .and_then(|specifier| resolve_specifier(file_path, &specifier, aliases))
         else {
             continue;
