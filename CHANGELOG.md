@@ -4,6 +4,11 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Security
+
+- rustls bumped to 0.23.46, fixing RUSTSEC-2026-0346, -0347, -0348 and -0349. The
+  temporary `cargo audit` ignores for them are removed.
+
 ## [0.12.1] - 2026-10-15
 
 ### Fixed
