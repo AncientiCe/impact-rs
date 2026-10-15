@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-10-15
+
 ### Security
 
 - rustls bumped to 0.23.46, fixing RUSTSEC-2026-0346, -0347, -0348 and -0349. The
