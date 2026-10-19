@@ -253,9 +253,10 @@ fn is_callable_interface_member(member: Node) -> bool {
 /// an exported *declaration* (`export default function Foo() {}`, `export default class
 /// Foo {}`) as an ordinary top-level declaration via its ordinary fallthrough, so by the
 /// time this runs, the matching `SymbolDecl` already exists in `out` either way; this
-/// pass only needs to find *which* one to flag. An anonymous default export (`export
-/// default () => {}`, `export default someCall()`) introduces no name at all — nothing to
-/// flag, same as it's never been a symbol of its own.
+/// pass only needs to find *which* one to flag. A higher-order-component wrapper
+/// (`export default memo(List)`) flags the component it wraps. An anonymous default export
+/// (`export default () => {}`, `export default someCall()`) introduces no name at all —
+/// nothing to flag, same as it's never been a symbol of its own.
 fn mark_default_export(root: Node, source: &[u8], prefix: &str, out: &mut [SymbolDecl]) {
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
@@ -276,7 +277,9 @@ fn mark_default_export(root: Node, source: &[u8], prefix: &str, out: &mut [Symbo
 /// anything a symbol could exist under: a bare identifier (`export default XScreen`), or
 /// a named `function`/`class` declaration (`export default function XScreen() {}`) —
 /// `export`/`default` are anonymous keyword tokens (confirmed via a real parse-tree
-/// dump), so the exported value is always the statement's one named child.
+/// dump), so the exported value is always the statement's one named child. A value
+/// wrapped in a higher-order component (`export default memo(List)`,
+/// `export default withTheme('card', styles)(Card)`) names the component it wraps.
 fn default_export_target(export_stmt: Node, source: &[u8], prefix: &str) -> Option<String> {
     let mut cursor = export_stmt.walk();
     let is_default = export_stmt
@@ -287,13 +290,29 @@ fn default_export_target(export_stmt: Node, source: &[u8], prefix: &str) -> Opti
     }
     let value = export_stmt.named_child(0)?;
     let name = match value.kind() {
-        "identifier" => value.utf8_text(source).ok()?,
+        "identifier" | "call_expression" => wrapped_identifier(value, source)?,
         "function_declaration" | "generator_function_declaration" | "class_declaration" => {
             field_text(value, "name", source)?
         }
         _ => return None,
     };
     Some(join_path(prefix, name))
+}
+
+/// The identifier a default-exported value wraps: the value itself when it is a bare
+/// identifier, or, for a call, the first argument of the outermost call, unwrapped through
+/// nested wrappers (`connect(mapState)(withTheme('x', s)(Card))` names `Card`). In a
+/// curried HOC (`withTheme('card', styles)(Card)`) the outermost call is the one applied
+/// to the component; its configuration lives in the inner call's arguments.
+fn wrapped_identifier<'a>(value: Node, source: &'a [u8]) -> Option<&'a str> {
+    match value.kind() {
+        "identifier" => value.utf8_text(source).ok(),
+        "call_expression" => {
+            let first_arg = value.child_by_field_name("arguments")?.named_child(0)?;
+            wrapped_identifier(first_arg, source)
+        }
+        _ => None,
+    }
 }
 
 /// A JSX attribute's `{expr}` value, if `expr` is a bare identifier — `component={Foo}`,

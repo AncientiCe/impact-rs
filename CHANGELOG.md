@@ -4,6 +4,13 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- TypeScript: a default export wrapped in a higher-order component
+  (`export default memo(List)`, `export default withTheme('card', styles)(Card)`) now
+  resolves to the wrapped component, so a file that imports it by default and renders
+  `<Card />` is reported as its caller. ([#14](https://github.com/AncientiCe/impact-rs/issues/14))
+
 ## [0.12.2] - 2026-10-15
 
 ### Security
