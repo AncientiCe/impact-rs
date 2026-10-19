@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-10-19
+
 ### Fixed
 
 - TypeScript: a default export wrapped in a higher-order component
