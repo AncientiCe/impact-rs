@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-10-20
+
 ### Fixed
 
 - Go: a type imported from another package and only named, never called, now counts as
