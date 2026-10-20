@@ -4,6 +4,14 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- Go: a type imported from another package and only named, never called, now counts as
+  a dependency. That covers a struct field (`Svc source.Service`), a parameter or
+  result, a composite literal, and an interface method signature. Renaming or moving the
+  type now reports those places instead of no dependents.
+  ([#15](https://github.com/AncientiCe/impact-rs/issues/15))
+
 ## [0.12.3] - 2026-10-19
 
 ### Fixed

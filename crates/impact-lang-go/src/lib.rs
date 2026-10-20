@@ -1,6 +1,6 @@
 //! A Go `LanguageAdapter`. Mirrors every other adapter's structure and scope boundaries
 //! (see `impact-lang-ts`'s module doc): functions, types, and methods
-//! (`extract_symbols`), calls (`extract_references`). Contract detection
+//! (`extract_symbols`), calls and imported type references (`extract_references`). Contract detection
 //! (`extract_contract_refs`) is scoped to one API route shape — see below — with no
 //! events/database detection, an honest empty result for those rather than a stub.
 //!
@@ -814,6 +814,7 @@ fn collect_refs(
             "function_declaration" => {
                 if let Some(name) = field_text(child, "name", source) {
                     let qualified = join_path(prefix, name);
+                    emit_signature_type_refs(child, source, &qualified, ctx, out);
                     if let Some(body) = child.child_by_field_name("body") {
                         collect_refs(body, source, prefix, Some(&qualified), ctx, out);
                     }
@@ -826,10 +827,33 @@ fn collect_refs(
                 ) {
                     if let Some(receiver_type) = last_identifier_text(receiver, source) {
                         let qualified = join_path(&join_path(prefix, receiver_type), name);
+                        emit_signature_type_refs(child, source, &qualified, ctx, out);
                         if let Some(body) = child.child_by_field_name("body") {
                             collect_refs(body, source, prefix, Some(&qualified), ctx, out);
                         }
                     }
+                }
+            }
+            // A top-level type's own definition — struct fields, interface method
+            // signatures, an alias's target — names other types on the type's behalf.
+            "type_declaration" if current_fn.is_none() => {
+                let mut cursor = child.walk();
+                for spec in child.children(&mut cursor) {
+                    if !matches!(spec.kind(), "type_spec" | "type_alias") {
+                        continue;
+                    }
+                    if let (Some(name), Some(definition)) = (
+                        field_text(spec, "name", source),
+                        spec.child_by_field_name("type"),
+                    ) {
+                        emit_type_refs(definition, source, &join_path(prefix, name), ctx, out);
+                    }
+                }
+            }
+            // Inside a body: a composite literal, a `var` type, a conversion target.
+            "qualified_type" => {
+                if let Some(from) = current_fn {
+                    emit_type_refs(child, source, from, ctx, out);
                 }
             }
             "call_expression" => {
@@ -876,6 +900,57 @@ fn collect_refs(
                 collect_refs(child, source, prefix, current_fn, ctx, out);
             }
         }
+    }
+}
+
+/// The types a function or method signature names — its parameters and results — as
+/// `References` from that function: one that only takes an imported struct still depends
+/// on it.
+fn emit_signature_type_refs(
+    declaration: Node,
+    source: &[u8],
+    from: &str,
+    ctx: &FileContext,
+    out: &mut Vec<RefDecl>,
+) {
+    for field in ["parameters", "result"] {
+        if let Some(node) = declaration.child_by_field_name(field) {
+            emit_type_refs(node, source, from, ctx, out);
+        }
+    }
+}
+
+/// Records every imported type a type expression names (`source.Service`, also inside
+/// `*`, `[]`, `map[...]` or a generic's arguments) as a `References` edge from `from`.
+/// Renaming or moving a type breaks these the same way a call breaks on a renamed
+/// function, yet none of them is a call. Only a package this file imports counts as
+/// evidence — the same rule a `pkg.Func()` call resolves by.
+fn emit_type_refs(
+    node: Node,
+    source: &[u8],
+    from: &str,
+    ctx: &FileContext,
+    out: &mut Vec<RefDecl>,
+) {
+    if node.kind() == "qualified_type" {
+        if let (Some(package), Some(name)) = (
+            field_text(node, "package", source),
+            field_text(node, "name", source),
+        ) {
+            if let target @ RefTarget::Module(_) = ctx.scope.qualified(package) {
+                out.push(RefDecl {
+                    from_qualified_path: from.to_string(),
+                    to_name: name.to_string(),
+                    kind: EdgeKind::References,
+                    to_target: target,
+                });
+            }
+        }
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        emit_type_refs(child, source, from, ctx, out);
     }
 }
 
