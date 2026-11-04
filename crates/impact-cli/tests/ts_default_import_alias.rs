@@ -78,6 +78,7 @@ fn default_export_renamed_at_the_import_site_still_resolves() {
         screen_report["direct"],
         serde_json::json!([
             {"path": "navigator::AppNavigator", "file": "navigator.tsx", "line": 3, "confidence": "Exact"},
+            {"path": "navigator::route:Screen", "file": "navigator.tsx", "line": 4, "confidence": "Exact"},
         ])
     );
 }

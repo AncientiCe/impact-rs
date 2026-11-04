@@ -69,6 +69,7 @@ fn jsx_attribute_and_object_literal_value_references_are_resolved() {
         report["direct"],
         serde_json::json!([
             {"path": "navigator::AppNavigator", "file": "navigator.tsx", "line": 3, "confidence": "Exact"},
+            {"path": "navigator::route:PrinterEditor", "file": "navigator.tsx", "line": 6, "confidence": "Exact"},
             {"path": "registry::buildRegistry", "file": "registry.ts", "line": 3, "confidence": "Exact"},
         ])
     );

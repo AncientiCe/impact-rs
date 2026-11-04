@@ -157,6 +157,16 @@ impl LanguageAdapter for TsAdapter {
             is_test_file,
             &mut out,
         );
+        // A spec registering a stub screen to render one in isolation is not a route of
+        // the app; counting it would give every real route a second, ambiguous definition.
+        if !is_test_file {
+            push_route_registrations(
+                ast.tree.root_node(),
+                ast.source.as_bytes(),
+                &prefix,
+                &mut out,
+            );
+        }
         mark_default_export(
             ast.tree.root_node(),
             ast.source.as_bytes(),
@@ -1109,6 +1119,184 @@ fn push_call_valued_declarators(
     }
 }
 
+/// The `NavigationContainer` methods that move to a screen by the route name it is
+/// registered under.
+const NAVIGATE_METHODS: &[&str] = &["navigate", "push", "popTo", "replace", "jumpTo"];
+
+/// The prefix of the synthetic symbol standing for a route name (`route:Detail`).
+///
+/// A screen is registered under a name (`<Stack.Screen name={Screens.Detail}
+/// component={DetailScreen} />`) and reached by that name from somewhere else
+/// (`navigation.navigate(Screens.Detail)`). Neither file mentions the other, so the only
+/// thing the two share is the name. Each registration becomes a symbol `route:<name>` that
+/// references its component, and each navigate call references `route:<name>` by name, so
+/// the linker joins them the way it joins any other name — and a screen's blast radius
+/// reaches the code that navigates to it.
+const ROUTE_PREFIX: &str = "route:";
+
+/// A route name written in source: a string (`"Detail"`) or the member of an enum or
+/// constants object (`Screens.Detail`, keyed by `Detail`). Enum members are usually named
+/// after their value, which is what lets the two forms meet. Anything else — a variable, a
+/// template string — has no name to read statically.
+fn route_key(node: Node, source: &[u8]) -> Option<String> {
+    let name = match node.kind() {
+        "jsx_expression" => return route_key(node.named_child(0)?, source),
+        "string" => node
+            .named_child(0)
+            .filter(|fragment| fragment.kind() == "string_fragment")?
+            .utf8_text(source)
+            .ok()?,
+        "member_expression" => field_text(node, "property", source)?,
+        "property_identifier" => node.utf8_text(source).ok()?,
+        _ => return None,
+    };
+    (!name.is_empty()).then(|| name.replace("::", ":"))
+}
+
+/// A route registration's route name and component, in either form React Navigation takes:
+/// a `<Stack.Screen name=... component={Foo} />` element (a screen given as a render
+/// callback, `{() => <Foo />}`, names no component to point at), or an entry of the static
+/// config's `screens` object — `Detail: { screen: DetailScreen }` or `Detail: DetailScreen`.
+fn route_registration<'a>(node: Node<'a>, source: &[u8]) -> Option<(String, Node<'a>)> {
+    match node.kind() {
+        "jsx_opening_element" | "jsx_self_closing_element" => {
+            screen_element_registration(node, source)
+        }
+        "pair" => static_screen_registration(node, source),
+        _ => None,
+    }
+}
+
+fn screen_element_registration<'a>(element: Node<'a>, source: &[u8]) -> Option<(String, Node<'a>)> {
+    let tag = element.child_by_field_name("name")?;
+    let tag_name = match tag.kind() {
+        "identifier" => tag.utf8_text(source).ok()?,
+        "member_expression" => field_text(tag, "property", source)?,
+        _ => return None,
+    };
+    if tag_name != "Screen" {
+        return None;
+    }
+    let mut key = None;
+    let mut component = None;
+    let mut cursor = element.walk();
+    for attribute in element.children(&mut cursor) {
+        if attribute.kind() != "jsx_attribute" {
+            continue;
+        }
+        let attribute_name = attribute.named_child(0)?.utf8_text(source).ok()?;
+        match attribute_name {
+            "name" => key = route_key(attribute.named_child(1)?, source),
+            "component" => component = jsx_attribute_value_identifier(attribute),
+            _ => {}
+        }
+    }
+    Some((key?, component?))
+}
+
+/// `Detail: { screen: DetailScreen, options }` or `Detail: DetailScreen`, an entry of a
+/// `screens: { ... }` object. Only an entry directly under a property named `screens` is a
+/// registration, so a `screen: 'Conversation'` inside navigate params, or any other object
+/// with a `screen` key, is not read as one.
+fn static_screen_registration<'a>(pair: Node<'a>, source: &[u8]) -> Option<(String, Node<'a>)> {
+    let screens = pair.parent()?.parent()?;
+    if screens.kind() != "pair" || field_text(screens, "key", source)? != "screens" {
+        return None;
+    }
+    let key = route_key(pair.child_by_field_name("key")?, source)?;
+    let value = pair.child_by_field_name("value")?;
+    let component = match value.kind() {
+        "identifier" => value,
+        "object" => {
+            let mut cursor = value.walk();
+            let entry = value.children(&mut cursor).find(|entry| {
+                entry.kind() == "pair" && field_text(*entry, "key", source) == Some("screen")
+            })?;
+            let component = entry.child_by_field_name("value")?;
+            (component.kind() == "identifier").then_some(component)?
+        }
+        _ => return None,
+    };
+    Some((key, component))
+}
+
+/// Registers one `route:<name>` symbol per distinct route name a file's
+/// registrations declare, at the first one that declares it.
+fn push_route_registrations(node: Node, source: &[u8], prefix: &str, out: &mut Vec<SymbolDecl>) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some((key, _)) = route_registration(child, source) {
+            let qualified = join_path(prefix, &format!("{ROUTE_PREFIX}{key}"));
+            if !out.iter().any(|s| s.qualified_path == qualified) {
+                out.push(SymbolDecl {
+                    kind: NodeKind::Field,
+                    qualified_path: qualified,
+                    line: child.start_position().row + 1,
+                    end_line: child.end_position().row + 1,
+                    is_test: false,
+                    is_generated: false,
+                    is_default_export: false,
+                    is_abstract: false,
+                    method: None,
+                });
+            }
+        }
+        push_route_registrations(child, source, prefix, out);
+    }
+}
+
+/// The edge from a `route:<name>` registration symbol to the component it registers.
+fn collect_route_registration(
+    node: Node,
+    source: &[u8],
+    prefix: &str,
+    scope: &FileScope,
+    out: &mut Vec<RefDecl>,
+) {
+    let Some((key, component)) = route_registration(node, source) else {
+        return;
+    };
+    let Ok(name) = component.utf8_text(source) else {
+        return;
+    };
+    let to_target = scope.bare(name);
+    if matches!(to_target, RefTarget::Opaque) {
+        return;
+    }
+    out.push(RefDecl {
+        from_qualified_path: join_path(prefix, &format!("{ROUTE_PREFIX}{key}")),
+        to_name: scope.original_name(name).to_string(),
+        kind: EdgeKind::References,
+        to_target,
+    });
+}
+
+/// The route name a call navigates to: `navigation.navigate(Screens.Detail, params)`,
+/// `navigation.popTo("Detail")`, or a bare `navigate(...)` helper. A method like `push` or
+/// `replace` is also an array/string/history method, so a member call only counts when its
+/// receiver is named like a navigation object (`navigation`, `navigationRef`,
+/// `this.props.navigation`); the route name must then be a string or an enum/constant
+/// member, so `tags.push(tag)` and `history.push("/x")` are never read as navigation.
+fn navigated_route_key(call: Node, source: &[u8]) -> Option<String> {
+    let func = call.child_by_field_name("function")?;
+    let is_navigation = match func.kind() {
+        "identifier" => func.utf8_text(source).ok()? == "navigate",
+        "member_expression" => {
+            let method = field_text(func, "property", source)?;
+            let receiver = func.child_by_field_name("object")?.utf8_text(source).ok()?;
+            NAVIGATE_METHODS.contains(&method) && receiver.to_lowercase().contains("nav")
+        }
+        _ => false,
+    };
+    if !is_navigation {
+        return None;
+    }
+    route_key(
+        call.child_by_field_name("arguments")?.named_child(0)?,
+        source,
+    )
+}
+
 /// A module-level `const`/`let`/`var` bound to an object literal — a shared options object
 /// (`export default defaultOptions`, `const routes = { ... } as const`) that other files
 /// import and hand around as data. It runs no call and holds no function, so nothing else
@@ -1244,6 +1432,14 @@ fn collect_call(
     // block changes it, and that sets `current_fn`.)
     let module_scope = join_path(prefix, MODULE_SCOPE);
     let from = current_fn.unwrap_or(&module_scope);
+    if let Some(key) = navigated_route_key(call, source) {
+        out.push(RefDecl {
+            from_qualified_path: from.to_string(),
+            to_name: format!("{ROUTE_PREFIX}{key}"),
+            kind: EdgeKind::References,
+            to_target: RefTarget::Opaque,
+        });
+    }
     // A curried call (`withTheme(name, getStyles)(Button)`) calls whatever the inner call
     // returns, which has no name: the last identifier inside that callee is one of the
     // inner call's arguments. The inner call is recorded by the recursion below.
@@ -1496,9 +1692,15 @@ fn collect_refs(
                         }
                     }
                 }
+                if !is_test_file {
+                    collect_route_registration(child, source, prefix, scope, out);
+                }
                 collect_refs(child, source, prefix, current_fn, is_test_file, scope, out);
             }
             "pair" => {
+                if !is_test_file {
+                    collect_route_registration(child, source, prefix, scope, out);
+                }
                 if let Some(from) = current_fn {
                     if let Some(value) = child.child_by_field_name("value") {
                         if value.kind() == "identifier" {

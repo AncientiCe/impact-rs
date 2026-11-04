@@ -10,7 +10,17 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   including `as const` and `satisfies`) is now indexed, so a file that imports it and
   passes it as `screenOptions={defaultOptions}` is reported as a dependent instead of
   the module showing none. Spreading it into another object
-  (`{ ...defaultOptions, detachPreviousScreen: true }`) counts as well. ([#16](https://github.com/AncientiCe/impact-rs/issues/16))
+  (`{ ...defaultOptions, detachPreviousScreen: true }`) counts as well.
+  ([#16](https://github.com/AncientiCe/impact-rs/issues/16))
+- TypeScript: code that navigates to a screen by its route name is now reported as
+  depending on that screen. `navigation.navigate(Screens.Detail)`, `popTo`, `push`,
+  `replace`, `jumpTo` and `navigate('Detail')` link to the component registered under that
+  name, whether it is registered with `<Stack.Screen name=... component={...} />` or in a
+  static `screens: { Detail: { screen: DetailScreen } }` config. A registration shows up in
+  reports as a `route:<name>` entry. Specs that register a stub screen do not count as
+  registrations, and a method like `push` only counts on a receiver named like a
+  navigation object, so `tags.push('Detail')` is not navigation. Nested navigation
+  (`navigate('Root', { screen: 'Detail' })`) is not followed. ([#16](https://github.com/AncientiCe/impact-rs/issues/16))
 
 ## [0.12.4] - 2026-10-20
 
