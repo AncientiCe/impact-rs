@@ -150,6 +150,13 @@ impl LanguageAdapter for TsAdapter {
             is_test_file,
             &mut out,
         );
+        push_object_valued_top_level(
+            ast.tree.root_node(),
+            ast.source.as_bytes(),
+            &prefix,
+            is_test_file,
+            &mut out,
+        );
         mark_default_export(
             ast.tree.root_node(),
             ast.source.as_bytes(),
@@ -1100,6 +1107,71 @@ fn push_call_valued_declarators(
             push(out, NodeKind::Field, prefix, name, declarator, is_test_file);
         }
     }
+}
+
+/// A module-level `const`/`let`/`var` bound to an object literal — a shared options object
+/// (`export default defaultOptions`, `const routes = { ... } as const`) that other files
+/// import and hand around as data. It runs no call and holds no function, so nothing else
+/// indexes it, and an import of it then resolved to nothing: a file passing it as
+/// `screenOptions={defaultOptions}` was never reported as depending on it.
+///
+/// Top level only (including through `export`): an object built inside a function is that
+/// function's local, not something another file can import.
+fn push_object_valued_top_level(
+    root: Node,
+    source: &[u8],
+    prefix: &str,
+    is_test_file: bool,
+    out: &mut Vec<SymbolDecl>,
+) {
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        let decl = if child.kind() == "export_statement" {
+            let mut inner = child.walk();
+            let found = child
+                .children(&mut inner)
+                .find(|c| matches!(c.kind(), "lexical_declaration" | "variable_declaration"));
+            match found {
+                Some(d) => d,
+                None => continue,
+            }
+        } else if matches!(child.kind(), "lexical_declaration" | "variable_declaration") {
+            child
+        } else {
+            continue;
+        };
+        let mut declarators = decl.walk();
+        for declarator in decl.children(&mut declarators) {
+            if declarator.kind() != "variable_declarator" {
+                continue;
+            }
+            let is_object = declarator
+                .child_by_field_name("value")
+                .is_some_and(|v| unwrap_type_assertion(v).kind() == "object");
+            if !is_object {
+                continue;
+            }
+            if let Some(name) = field_text(declarator, "name", source) {
+                push(out, NodeKind::Field, prefix, name, declarator, is_test_file);
+            }
+        }
+    }
+}
+
+/// The expression under a TypeScript-only wrapper that does not change what the value is
+/// at runtime: `{ ... } as const`, `{ ... } satisfies Options`, `({ ... })`.
+fn unwrap_type_assertion(node: Node) -> Node {
+    let mut current = node;
+    while matches!(
+        current.kind(),
+        "as_expression" | "satisfies_expression" | "parenthesized_expression"
+    ) {
+        match current.named_child(0) {
+            Some(inner) => current = inner,
+            None => break,
+        }
+    }
+    current
 }
 
 /// Whether this subtree performs a call — the test for "does this initializer do work?".
