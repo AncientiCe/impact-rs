@@ -167,6 +167,7 @@ impl LanguageAdapter for TsAdapter {
                 &mut out,
             );
         }
+        push_anonymous_default_export(ast.tree.root_node(), &prefix, is_test_file, &mut out);
         mark_default_export(
             ast.tree.root_node(),
             ast.source.as_bytes(),
@@ -287,6 +288,66 @@ fn mark_default_export(root: Node, source: &[u8], prefix: &str, out: &mut [Symbo
             symbol.is_default_export = true;
         }
         return;
+    }
+}
+
+/// The qualified name an anonymous default export gets: `export default` cannot be
+/// followed by a name this file could also declare, so it can never collide with one.
+const DEFAULT_EXPORT: &str = "default";
+
+/// The function an `export default` statement exports when it has no name:
+/// `export default (options) => async (dispatch) => { ... }`, `export default function () {}`.
+fn anonymous_default_function(export_stmt: Node) -> Option<Node> {
+    let mut cursor = export_stmt.walk();
+    let is_default = export_stmt
+        .children(&mut cursor)
+        .any(|c| c.kind() == "default");
+    if !is_default {
+        return None;
+    }
+    let value = export_stmt.named_child(0)?;
+    let is_function = match value.kind() {
+        "arrow_function" | "function_expression" | "function" | "generator_function" => true,
+        "function_declaration" | "generator_function_declaration" => {
+            value.child_by_field_name("name").is_none()
+        }
+        _ => false,
+    };
+    is_function.then_some(value)
+}
+
+/// Registers a default-exported function with no name as a symbol of its own, `default`,
+/// and flags it as the module's default export.
+///
+/// Without a symbol the calls inside it were attributed to the file's module scope, which
+/// every file loading the module runs, so one call there made the whole chain of importers
+/// a dependent. With one, the calls belong to the function, and a default import of the
+/// module resolves to it.
+fn push_anonymous_default_export(
+    root: Node,
+    prefix: &str,
+    is_test_file: bool,
+    out: &mut Vec<SymbolDecl>,
+) {
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        if child.kind() != "export_statement" {
+            continue;
+        }
+        if let Some(function) = anonymous_default_function(child) {
+            push(
+                out,
+                NodeKind::Function,
+                prefix,
+                DEFAULT_EXPORT,
+                function,
+                is_test_file,
+            );
+            if let Some(symbol) = out.last_mut() {
+                symbol.is_default_export = true;
+            }
+            return;
+        }
     }
 }
 
@@ -1553,6 +1614,22 @@ fn collect_refs(
                     );
                 } else {
                     collect_refs(child, source, prefix, current_fn, is_test_file, scope, out);
+                }
+            }
+            // `export default () => { ... }` — the calls inside belong to the `default`
+            // symbol `push_anonymous_default_export` registered, not to the module scope.
+            "export_statement" if anonymous_default_function(child).is_some() => {
+                if let Some(function) = anonymous_default_function(child) {
+                    let qualified = join_path(prefix, DEFAULT_EXPORT);
+                    collect_refs(
+                        function,
+                        source,
+                        prefix,
+                        Some(&qualified),
+                        is_test_file,
+                        scope,
+                        out,
+                    );
                 }
             }
             "lexical_declaration" | "variable_declaration" => {

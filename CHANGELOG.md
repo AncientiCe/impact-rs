@@ -6,6 +6,13 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ### Fixed
 
+- TypeScript: calls inside a default-exported function with no name
+  (`export default (options) => async (dispatch) => { ... }`, the shape of a redux thunk
+  factory) are attributed to that function, registered as `default`, instead of to the file's
+  module scope. A module scope runs in every file that loads the module, so one call there
+  made the whole chain of importers a dependent: on a large app a single such file put about
+  nine hundred entries into one diff report. A default import of such a module now resolves
+  to the function too.
 - TypeScript: a module-level object literal (`const defaultOptions = { ... }`,
   including `as const` and `satisfies`) is now indexed, so a file that imports it and
   passes it as `screenOptions={defaultOptions}` is reported as a dependent instead of
