@@ -46,13 +46,15 @@ fn query(cache_dir: &Path, file: &str) -> Value {
 /// whose initializer is an object literal was never indexed — the module's default export
 /// had no symbol to flag, so nothing the importing files referenced could resolve to it.
 ///
-/// `options.ts` default-exports the object; `bare.tsx` passes it as a JSX attribute value.
-/// `unrelated.tsx` declares its own local `defaultOptions` and must not be reported.
+/// `options.ts` default-exports the object; `bare.tsx` passes it as a JSX attribute value
+/// and `spread.tsx` spreads it into a new object (`{ ...defaultOptions, extra }`), the form
+/// most navigators use to override one option. `unrelated.tsx` declares its own local
+/// `defaultOptions` and must not be reported.
 #[test]
-fn object_literal_default_export_passed_as_jsx_attribute_is_a_dependency() {
+fn object_literal_default_export_used_as_jsx_attribute_or_spread_is_a_dependency() {
     let cache_dir = tempfile::tempdir().unwrap();
     let stats = index(cache_dir.path());
-    assert_eq!(stats["files_indexed"], 3);
+    assert_eq!(stats["files_indexed"], 4);
 
     let report = query(cache_dir.path(), "options.ts");
 
@@ -60,6 +62,7 @@ fn object_literal_default_export_passed_as_jsx_attribute_is_a_dependency() {
         report["direct"],
         serde_json::json!([
             {"path": "bare::BareStack", "file": "bare.tsx", "line": 3, "confidence": "Exact"},
+            {"path": "spread::SpreadStack", "file": "spread.tsx", "line": 3, "confidence": "Exact"},
         ])
     );
 }

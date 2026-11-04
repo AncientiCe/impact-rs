@@ -9,7 +9,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 - TypeScript: a module-level object literal (`const defaultOptions = { ... }`,
   including `as const` and `satisfies`) is now indexed, so a file that imports it and
   passes it as `screenOptions={defaultOptions}` is reported as a dependent instead of
-  the module showing none. ([#16](https://github.com/AncientiCe/impact-rs/issues/16))
+  the module showing none. Spreading it into another object
+  (`{ ...defaultOptions, detachPreviousScreen: true }`) counts as well. ([#16](https://github.com/AncientiCe/impact-rs/issues/16))
 
 ## [0.12.4] - 2026-10-20
 

@@ -1518,6 +1518,30 @@ fn collect_refs(
                 }
                 collect_refs(child, source, prefix, current_fn, is_test_file, scope, out);
             }
+            // `{ ...defaultOptions, detachPreviousScreen: true }` — the object being spread
+            // is read, not called, and is how a navigator overrides one option of a shared
+            // set. Only a bare identifier is a reference; `...getOptions()` is a call that
+            // `collect_refs` already finds by recursing.
+            "spread_element" => {
+                if let Some(from) = current_fn {
+                    if let Some(spread) = child.named_child(0) {
+                        if spread.kind() == "identifier" {
+                            if let Ok(name) = spread.utf8_text(source) {
+                                let to_target = scope.bare(name);
+                                if !matches!(to_target, RefTarget::Opaque) {
+                                    out.push(RefDecl {
+                                        from_qualified_path: from.to_string(),
+                                        to_name: scope.original_name(name).to_string(),
+                                        kind: EdgeKind::References,
+                                        to_target,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                collect_refs(child, source, prefix, current_fn, is_test_file, scope, out);
+            }
             // A leaf node (`{ Foo }`, shorthand for `{ Foo: Foo }`) — no children to
             // recurse into.
             "shorthand_property_identifier" => {
