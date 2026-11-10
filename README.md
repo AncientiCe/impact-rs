@@ -266,10 +266,15 @@ A chain of calls is only as strong as its weakest step. To see only `exact` matc
 | Rust | ✅ | `#[test]`, `#[tokio::test]`, `#[async_std::test]` | axum | ✅ marker trait or naming convention · sqlx `query!`-family macros |
 | TypeScript / TSX / JavaScript / JSX | ✅ | `*.test.*`, `*.spec.*`, `__tests__/` file names | Express, Fastify (named handlers) | — |
 | Python | ✅ | pytest `test_` prefix | FastAPI, Flask | — |
-| Go | ✅ | `TestXxx` in `_test.go` | `net/http` Go 1.22+ (`mux.HandleFunc("POST /payments", h)`) | — |
+| Go | ✅ | `TestXxx` in `_test.go` | `net/http` Go 1.22+ (`mux.HandleFunc("POST /payments", h)`) | SQL literals in `Exec` / `Query` / `QueryRow` (also `Context` variants) |
 | Kotlin | ✅ | JUnit `@Test` | — | — |
 | Swift | ✅ | XCTest `test…` methods on `XCTestCase` | — | — |
 | C++ | ✅ (including out-of-line `Type::method` definitions) | — (no single convention across GoogleTest, Catch2 and Boost.Test) | — | — |
+
+Go database detection recognizes literal query arguments by method name, including
+calls through wrappers with the same method names. It reports tables after `FROM`,
+`JOIN`, `INTO`, and `UPDATE`; SQL values and comments are skipped. Query variables,
+constructed SQL, prepared statements, and CTE alias resolution are not followed.
 
 Routes use the same `VERB /path` format in every language, so a Go service and a TypeScript client using the same route can be matched across repositories (see [Cross-project impact](#-cross-project-impact)).
 

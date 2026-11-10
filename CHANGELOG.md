@@ -12,6 +12,11 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ### Fixed
 
+- Go: SQL literals passed to `Exec`, `Query`, and `QueryRow` (including `Context`
+  variants) now contribute table names to file and symbol database reports. Multiline
+  raw strings, interpreted strings, and SQL comments are supported.
+  ([#17](https://github.com/AncientiCe/impact-rs/issues/17))
+
 - TypeScript: a module-level object literal (`const defaultOptions = { ... }`,
   including `as const` and `satisfies`) is now indexed, so a file that imports it and
   passes it as `screenOptions={defaultOptions}` is reported as a dependent instead of
