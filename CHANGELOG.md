@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.12.5] - 2026-11-10
+
 ### Changed
 
 - Upgrade bundled SQLite via rusqlite 0.41.1 / libsqlite3-sys 0.39.1 to address
