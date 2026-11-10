@@ -4,6 +4,12 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- Upgrade bundled SQLite via rusqlite 0.41.1 / libsqlite3-sys 0.39.1 to address
+  RUSTSEC-2026-0459 (a crafted database/WAL pair could expose process memory).
+  Building from source now requires Rust 1.89 or newer.
+
 ### Fixed
 
 - TypeScript: a module-level object literal (`const defaultOptions = { ... }`,
