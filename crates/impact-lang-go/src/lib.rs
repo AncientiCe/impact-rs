@@ -1,8 +1,8 @@
 //! A Go `LanguageAdapter`. Mirrors every other adapter's structure and scope boundaries
 //! (see `impact-lang-ts`'s module doc): functions, types, and methods
 //! (`extract_symbols`), calls and imported type references (`extract_references`). Contract detection
-//! (`extract_contract_refs`) is scoped to one API route shape — see below — with no
-//! events/database detection, an honest empty result for those rather than a stub.
+//! (`extract_contract_refs`) covers net/http routes and literal SQL passed to
+//! Exec/Query/QueryRow methods (including Context variants). Events are not detected.
 //!
 //! Structurally different from the others in one way, confirmed via a real parse-tree
 //! dump before writing this: Go has no impl-block/class-body nesting at all. A method is
@@ -119,6 +119,8 @@ impl LanguageAdapter for GoAdapter {
         collect_contracts(
             ast.tree.root_node(),
             ast.source.as_bytes(),
+            &module_prefix(&ast.path),
+            None,
             &self.config,
             &mut out,
         );
@@ -954,30 +956,214 @@ fn emit_type_refs(
     }
 }
 
-/// Walks the whole file looking for `net/http` route registrations. Unlike `collect_refs`,
-/// this doesn't need to track an enclosing function: a route's `symbol_name` is the
-/// handler being registered, not whichever function happens to make the registration
-/// call, so a plain recursive walk (no prefix/current-function bookkeeping) is enough.
+/// Routes belong to the registered handler; SQL belongs to the enclosing function
+/// or method. Method names and literal SQL are syntactic evidence, not type checking:
+/// wrappers exposing the database/sql call shape are recognized too.
 fn collect_contracts(
     node: Node,
     source: &[u8],
+    prefix: &str,
+    current_fn: Option<&str>,
     config: &DetectorConfig,
     out: &mut Vec<ContractRef>,
 ) {
-    if node.kind() == "call_expression" && config.api_frameworks.iter().any(|f| f == "net/http") {
-        if let Some((verb, path, handler)) = net_http_route_call(node, source) {
-            out.push(ContractRef {
-                contract_kind: ContractKind::ApiRoute,
-                contract_id: format!("{verb} {path}"),
-                symbol_name: handler,
-                role: ContractRole::Produces,
-            });
+    let qualified = match node.kind() {
+        "function_declaration" => {
+            field_text(node, "name", source).map(|name| join_path(prefix, name))
+        }
+        "method_declaration" => node
+            .child_by_field_name("receiver")
+            .and_then(|receiver| last_identifier_text(receiver, source))
+            .zip(field_text(node, "name", source))
+            .map(|(receiver, name)| join_path(&join_path(prefix, receiver), name)),
+        _ => None,
+    };
+    let current_fn = qualified.as_deref().or(current_fn);
+    if node.kind() == "call_expression" {
+        if config.api_frameworks.iter().any(|f| f == "net/http") {
+            if let Some((verb, path, handler)) = net_http_route_call(node, source) {
+                out.push(ContractRef {
+                    contract_kind: ContractKind::ApiRoute,
+                    contract_id: format!("{verb} {path}"),
+                    symbol_name: handler,
+                    role: ContractRole::Produces,
+                });
+            }
+        }
+        if let (Some(from), Some(sql)) = (current_fn, sql_call_literal(node, source)) {
+            for (table, role) in sql_table_refs(&sql) {
+                out.push(ContractRef {
+                    contract_kind: ContractKind::Table,
+                    contract_id: table,
+                    symbol_name: from.to_string(),
+                    role,
+                });
+            }
         }
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        collect_contracts(child, source, config, out);
+        collect_contracts(child, source, prefix, current_fn, config, out);
     }
+}
+
+fn sql_call_literal(call: Node, source: &[u8]) -> Option<String> {
+    let function = call.child_by_field_name("function")?;
+    if function.kind() != "selector_expression" {
+        return None;
+    }
+    let argument = match field_text(function, "field", source)? {
+        "Exec" | "Query" | "QueryRow" => 0,
+        "ExecContext" | "QueryContext" | "QueryRowContext" => 1,
+        _ => return None,
+    };
+    let literal = call
+        .child_by_field_name("arguments")?
+        .named_child(argument)?;
+    let text = literal.utf8_text(source).ok()?;
+    match literal.kind() {
+        "raw_string_literal" => Some(text.strip_prefix('`')?.strip_suffix('`')?.replace('\r', "")),
+        "interpreted_string_literal" => {
+            decode_go_string(text.strip_prefix('"')?.strip_suffix('"')?)
+        }
+        _ => None,
+    }
+}
+
+/// Decode Go escapes before SQL tokenization (Go also permits hex and octal escapes,
+/// which JSON string decoding does not).
+fn decode_go_string(text: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        let escaped = chars.next()?;
+        let decoded = match escaped {
+            'a' => '\u{7}',
+            'b' => '\u{8}',
+            'f' => '\u{c}',
+            'n' => '\n',
+            'r' => '\r',
+            't' => '\t',
+            'v' => '\u{b}',
+            '\\' => '\\',
+            '"' => '"',
+            'x' | 'u' | 'U' | '0'..='7' => {
+                let (digits, radix, mut value) = match escaped {
+                    'x' => (2, 16, 0),
+                    'u' => (4, 16, 0),
+                    'U' => (8, 16, 0),
+                    c => (2, 8, c.to_digit(8)?),
+                };
+                for _ in 0..digits {
+                    value = value
+                        .checked_mul(radix)?
+                        .checked_add(chars.next()?.to_digit(radix)?)?;
+                }
+                char::from_u32(value)?
+            }
+            _ => return None,
+        };
+        out.push(decoded);
+    }
+    Some(out)
+}
+
+/// Tokenize identifiers separately from SQL values and comments, so words like FROM
+/// inside a value/comment cannot create table contracts. This is a literal-query
+/// detector, not a SQL resolver: dynamic SQL and CTE alias resolution are outside scope.
+fn sql_table_refs(sql: &str) -> Vec<(String, ContractRole)> {
+    let mut tokens = Vec::new();
+    let mut chars = sql.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '-' if chars.peek() == Some(&'-') => {
+                chars.next();
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        break;
+                    }
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                while let Some(c) = chars.next() {
+                    if c == '*' && chars.peek() == Some(&'/') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            '\'' | '"' | '`' | '[' => {
+                let end = if c == '[' { ']' } else { c };
+                let mut token = String::new();
+                while let Some(next) = chars.next() {
+                    if next == end {
+                        if chars.peek() == Some(&end) {
+                            chars.next();
+                            token.push(end);
+                        } else {
+                            break;
+                        }
+                    } else {
+                        token.push(next);
+                    }
+                }
+                // Keep a barrier for values: FROM 'value' must not pick up a later token.
+                tokens.push((if c == '\'' { String::new() } else { token }, false));
+            }
+            c if c.is_alphanumeric() || c == '_' => {
+                let mut token = c.to_string();
+                while let Some(&next) = chars.peek() {
+                    if !next.is_alphanumeric() && next != '_' && next != '$' {
+                        break;
+                    }
+                    chars.next();
+                    token.push(next);
+                }
+                tokens.push((token, true));
+            }
+            c if !c.is_whitespace() => tokens.push((c.to_string(), false)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for (i, (token, keyword)) in tokens.iter().enumerate() {
+        if !keyword {
+            continue;
+        }
+        let role = match token.to_ascii_uppercase().as_str() {
+            "FROM"
+                if i > 0 && tokens[i - 1].1 && tokens[i - 1].0.eq_ignore_ascii_case("DELETE") =>
+            {
+                ContractRole::Writes
+            }
+            "FROM" | "JOIN" => ContractRole::Reads,
+            "INTO" | "UPDATE" => ContractRole::Writes,
+            _ => continue,
+        };
+        let Some(table) = tokens
+            .get(i + 1)
+            .filter(|(t, _)| t.starts_with(|c: char| c.is_alphabetic() || c == '_'))
+        else {
+            continue;
+        };
+        let mut table = table.0.clone();
+        let mut next = i + 2;
+        while tokens.get(next).is_some_and(|(t, _)| t == ".") {
+            let Some(part) = tokens.get(next + 1) else {
+                break;
+            };
+            table.push('.');
+            table.push_str(&part.0);
+            next += 2;
+        }
+        out.push((table, role));
+    }
+    out
 }
 
 /// A `mux.HandleFunc("METHOD /path", handler)` registration, if `call` is one — see the

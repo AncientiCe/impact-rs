@@ -4,6 +4,12 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- Upgrade bundled SQLite via rusqlite 0.41.1 / libsqlite3-sys 0.39.1 to address
+  RUSTSEC-2026-0459 (a crafted database/WAL pair could expose process memory).
+  Building from source now requires Rust 1.89 or newer.
+
 ### Fixed
 
 - TypeScript: calls inside a default-exported function with no name
@@ -13,6 +19,12 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   made the whole chain of importers a dependent: on a large app a single such file put about
   nine hundred entries into one diff report. A default import of such a module now resolves
   to the function too.
+
+- Go: SQL literals passed to `Exec`, `Query`, and `QueryRow` (including `Context`
+  variants) now contribute table names to file and symbol database reports. Multiline
+  raw strings, interpreted strings, and SQL comments are supported.
+  ([#17](https://github.com/AncientiCe/impact-rs/issues/17))
+
 - TypeScript: a module-level object literal (`const defaultOptions = { ... }`,
   including `as const` and `satisfies`) is now indexed, so a file that imports it and
   passes it as `screenOptions={defaultOptions}` is reported as a dependent instead of

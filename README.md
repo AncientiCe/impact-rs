@@ -7,7 +7,7 @@
   <a href="https://github.com/AncientiCe/impact-rs/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/AncientiCe/impact-rs?sort=semver"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
   <img alt="Platforms: Linux, macOS, Windows" src="https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-informational">
-  <img alt="Rust 1.82+" src="https://img.shields.io/badge/rust-1.82%2B-orange?logo=rust">
+  <img alt="Rust 1.89+" src="https://img.shields.io/badge/rust-1.89%2B-orange?logo=rust">
   <img alt="Works with Claude Code, Codex, Cursor, VS Code, Zed, Gemini CLI, Kiro, Windsurf and OpenCode" src="https://img.shields.io/badge/works%20with-Claude%20Code%20%7C%20Codex%20%7C%20Cursor%20%7C%20VS%20Code%20%7C%20Zed%20%7C%20Gemini%20CLI%20%7C%20Kiro%20%7C%20Windsurf%20%7C%20OpenCode-8A2BE2">
 </p>
 
@@ -63,7 +63,7 @@ It works for people at a terminal and for AI coding agents over [MCP](https://mo
 | macOS / Linux (Homebrew) | `brew install ancientice/impact/impact` |
 | macOS / Linux (script) | `curl -fsSL https://raw.githubusercontent.com/AncientiCe/impact-rs/master/scripts/install.sh \| sh` |
 | Windows (PowerShell) | `irm https://raw.githubusercontent.com/AncientiCe/impact-rs/master/scripts/install.ps1 \| iex` |
-| Any platform, from source (needs Rust 1.82+) | `cargo install --git https://github.com/AncientiCe/impact-rs --locked impact-cli` |
+| Any platform, from source (needs Rust 1.89+) | `cargo install --git https://github.com/AncientiCe/impact-rs --locked impact-cli` |
 
 The install scripts put the binary in `~/.local/bin` on macOS/Linux and `%LOCALAPPDATA%\Programs\impact\bin` on Windows. Set `IMPACT_INSTALL_DIR` to put it somewhere else. Every [tagged release](https://github.com/AncientiCe/impact-rs/releases) has prebuilt binaries for Linux x86_64, macOS x86_64/arm64 and Windows x86_64. `impact` is not on crates.io yet.
 
@@ -266,10 +266,15 @@ A chain of calls is only as strong as its weakest step. To see only `exact` matc
 | Rust | ✅ | `#[test]`, `#[tokio::test]`, `#[async_std::test]` | axum | ✅ marker trait or naming convention · sqlx `query!`-family macros |
 | TypeScript / TSX / JavaScript / JSX | ✅ | `*.test.*`, `*.spec.*`, `__tests__/` file names | Express, Fastify (named handlers) | — |
 | Python | ✅ | pytest `test_` prefix | FastAPI, Flask | — |
-| Go | ✅ | `TestXxx` in `_test.go` | `net/http` Go 1.22+ (`mux.HandleFunc("POST /payments", h)`) | — |
+| Go | ✅ | `TestXxx` in `_test.go` | `net/http` Go 1.22+ (`mux.HandleFunc("POST /payments", h)`) | SQL literals in `Exec` / `Query` / `QueryRow` (also `Context` variants) |
 | Kotlin | ✅ | JUnit `@Test` | — | — |
 | Swift | ✅ | XCTest `test…` methods on `XCTestCase` | — | — |
 | C++ | ✅ (including out-of-line `Type::method` definitions) | — (no single convention across GoogleTest, Catch2 and Boost.Test) | — | — |
+
+Go database detection recognizes literal query arguments by method name, including
+calls through wrappers with the same method names. It reports tables after `FROM`,
+`JOIN`, `INTO`, and `UPDATE`; SQL values and comments are skipped. Query variables,
+constructed SQL, prepared statements, and CTE alias resolution are not followed.
 
 Routes use the same `VERB /path` format in every language, so a Go service and a TypeScript client using the same route can be matched across repositories (see [Cross-project impact](#-cross-project-impact)).
 
