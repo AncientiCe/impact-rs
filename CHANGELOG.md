@@ -4,6 +4,20 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- TypeScript/JavaScript: the trap methods of a handler written inline in `new Proxy(...)`
+  (`get`, `apply`, ...) are no longer indexed as functions, so untyped `map.get()` or
+  `fn.apply()` calls elsewhere in the project no longer resolve to them and list unrelated
+  modules as probable callers of the file that builds the proxy. Calls inside a trap now
+  count as calls from the function that creates the proxy.
+  ([#18](https://github.com/AncientiCe/impact-rs/issues/18))
+- TypeScript/JavaScript: `fn.apply(...)`, `fn.call(...)` and `fn.bind(...)` on an untyped
+  receiver, and calls on built-in namespaces such as `Reflect`, `Object` and `Math` that
+  the file doesn't import or declare, no longer link to a project function that shares
+  the member's name.
+  ([#18](https://github.com/AncientiCe/impact-rs/issues/18))
+
 ## [0.12.5] - 2026-11-10
 
 ### Changed

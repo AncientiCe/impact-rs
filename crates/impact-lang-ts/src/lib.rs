@@ -885,6 +885,57 @@ fn call_target(callee: Node, source: &[u8], scope: &FileScope) -> RefTarget {
     }
 }
 
+/// `Function.prototype`'s own invokers. `fn.apply(...)` runs `fn`, never a project
+/// function called `apply`.
+const FUNCTION_PROTOTYPE_INVOKERS: &[&str] = &["apply", "call", "bind"];
+
+/// JavaScript's built-in namespace objects. `Reflect.ownKeys(...)` or `Object.keys(...)`
+/// on one that this file neither imports nor declares is the runtime's, not a project
+/// function that happens to share the member's name.
+const BUILTIN_NAMESPACES: &[&str] = &[
+    "Reflect", "Object", "Math", "JSON", "Promise", "Array", "Number", "String", "Symbol",
+    "Atomics", "Intl", "console",
+];
+
+/// Whether a member-call callee is a JavaScript builtin by its shape alone: an invoker
+/// from `Function.prototype` or a member of a built-in namespace. Only meaningful for a
+/// callee `call_target` left `Opaque` — a receiver this file imports or declares (a local
+/// `Reflect`, `this.apply()`) has evidence of its own and keeps its edge.
+fn is_builtin_member_call(callee: Node, source: &[u8]) -> bool {
+    if callee.kind() != "member_expression" {
+        return false;
+    }
+    let property = callee
+        .child_by_field_name("property")
+        .and_then(|p| p.utf8_text(source).ok());
+    if property.is_some_and(|p| FUNCTION_PROTOTYPE_INVOKERS.contains(&p)) {
+        return true;
+    }
+    callee
+        .child_by_field_name("object")
+        .filter(|object| object.kind() == "identifier")
+        .and_then(|object| object.utf8_text(source).ok())
+        .is_some_and(|object| BUILTIN_NAMESPACES.contains(&object))
+}
+
+/// Whether a method is a trap on a `Proxy` handler written inline: a method of an object
+/// literal passed straight to `new Proxy(...)`. The runtime invokes a trap when the proxy
+/// is used; nothing calls it by name. Indexed as a symbol, its name — `get`, `set`,
+/// `apply`, `has` — is one every untyped `map.get()` or `fn.apply()` in the project
+/// matches, which made unrelated modules callers of whatever file built the proxy.
+fn is_proxy_trap(method: Node, source: &[u8]) -> bool {
+    method
+        .parent()
+        .filter(|handler| handler.kind() == "object")
+        .and_then(|handler| handler.parent())
+        .filter(|args| args.kind() == "arguments")
+        .and_then(|args| args.parent())
+        .filter(|construction| construction.kind() == "new_expression")
+        .and_then(|construction| construction.child_by_field_name("constructor"))
+        .filter(|constructor| constructor.kind() == "identifier")
+        .is_some_and(|constructor| constructor.utf8_text(source) == Ok("Proxy"))
+}
+
 /// The call names that introduce a named scope in a test file. Jest, Vitest and Mocha all
 /// share these, which is the same reasoning `is_test_file` uses: a convention all three
 /// agree on is a convention worth reading, unlike the parts where they differ.
@@ -981,7 +1032,7 @@ fn walk(node: Node, source: &[u8], prefix: &str, is_test_file: bool, out: &mut V
                 }
                 continue;
             }
-            "method_definition" => {
+            "method_definition" if !is_proxy_trap(child, source) => {
                 if let Some(name) = field_text(child, "name", source) {
                     push(out, NodeKind::Function, prefix, name, child, is_test_file);
                 }
@@ -1516,12 +1567,15 @@ fn collect_call(
             } else {
                 name
             };
-            out.push(RefDecl {
-                from_qualified_path: from.to_string(),
-                to_name: name.to_string(),
-                kind: EdgeKind::Calls,
-                to_target: call_target(func, source, scope),
-            });
+            let to_target = call_target(func, source, scope);
+            if !(matches!(to_target, RefTarget::Opaque) && is_builtin_member_call(func, source)) {
+                out.push(RefDecl {
+                    from_qualified_path: from.to_string(),
+                    to_name: name.to_string(),
+                    kind: EdgeKind::Calls,
+                    to_target,
+                });
+            }
         }
     }
     // A chained call puts its receiver in the callee, not the arguments:
@@ -1584,6 +1638,13 @@ fn collect_refs(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
+            // A trap has no symbol of its own (see `is_proxy_trap`): what it calls, the
+            // function that built the proxy calls, since every use of the proxy runs it.
+            "method_definition" if is_proxy_trap(child, source) => {
+                if let Some(body) = child.child_by_field_name("body") {
+                    collect_refs(body, source, prefix, current_fn, is_test_file, scope, out);
+                }
+            }
             "function_declaration" | "generator_function_declaration" | "method_definition" => {
                 if let Some(name) = field_text(child, "name", source) {
                     let qualified = join_path(prefix, name);
