@@ -606,7 +606,9 @@ fn extend_use_path(node: Node, source: &[u8], module: &UseModule, path: &mut Vec
             }
         }
         "super" => {
-            // One module out from this file's own module.
+            // One module out from this file's own module — and one further for each
+            // `super` after it (`super::super::format`), which arrives here with `path`
+            // already holding the first climb's result.
             if path.is_empty() {
                 let mut segments: Vec<&str> = module
                     .prefix
@@ -615,6 +617,8 @@ fn extend_use_path(node: Node, source: &[u8], module: &UseModule, path: &mut Vec
                     .collect();
                 segments.pop();
                 path.extend(segments.into_iter().map(str::to_string));
+            } else {
+                path.pop();
             }
         }
         _ => {
@@ -877,14 +881,20 @@ fn qualifier_target(segments: &[String], ctx: &FileContext) -> RefTarget {
         "crate" => RefTarget::Module(prepend_module(&ctx.crate_root, &rest())),
         "self" => RefTarget::Module(prepend_module(ctx.scope.module(), &rest())),
         "super" => {
+            // Each leading `super` climbs one module: `super::super::format` from
+            // `api::rows` is the crate root's `format`.
             let mut parent: Vec<&str> = ctx
                 .scope
                 .module()
                 .split("::")
                 .filter(|s| !s.is_empty())
                 .collect();
-            parent.pop();
-            RefTarget::Module(prepend_module(&parent.join("::"), &rest()))
+            let climbs = segments.iter().take_while(|s| *s == "super").count();
+            parent.truncate(parent.len().saturating_sub(climbs));
+            RefTarget::Module(prepend_module(
+                &parent.join("::"),
+                &segments[climbs..].join("::"),
+            ))
         }
         _ => match ctx.scope.qualified(first) {
             RefTarget::Opaque => RefTarget::Module(segments.join("::")),
@@ -1044,6 +1054,23 @@ fn collect_refs(
                     emit_path_ref(child, source, from, ctx, out);
                 }
             }
+            // A bare name handed on as a value — `.map(render_row)`, `let f = render_row;`.
+            // Only a name this file imports or declares counts: a local or parameter that
+            // happens to share a function's name resolves nowhere here and is dropped.
+            "identifier" if is_value_position(child) => {
+                if let (Some(from), Ok(name)) = (current_fn, child.utf8_text(source)) {
+                    if let target @ (RefTarget::Module(_) | RefTarget::ModuleDefault(_)) =
+                        ctx.scope.bare(name)
+                    {
+                        out.push(RefDecl {
+                            from_qualified_path: from.to_string(),
+                            to_name: name.to_string(),
+                            kind: EdgeKind::References,
+                            to_target: target,
+                        });
+                    }
+                }
+            }
             // A struct-variant literal (`ClientMessage::Join { room }`) or pattern outside
             // a match arm (`if let ClientMessage::Join { room } = msg`). The name is a
             // `scoped_type_identifier`, not a call, so nothing else would see it; the
@@ -1177,6 +1204,23 @@ fn emit_type_refs(
     }
 }
 
+/// Whether an identifier stands where a value is passed on rather than bound or
+/// dereferenced: a call argument, or the initializer of a `let`. A receiver (`ids.iter()`)
+/// or a pattern (`let ids = ..`) names a local, never the function a signature change
+/// would break.
+fn is_value_position(identifier: Node) -> bool {
+    let Some(parent) = identifier.parent() else {
+        return false;
+    };
+    match parent.kind() {
+        "arguments" => true,
+        "let_declaration" => parent
+            .child_by_field_name("value")
+            .is_some_and(|value| value == identifier),
+        _ => false,
+    }
+}
+
 /// Whether a call's callee is a plain path (`Type::method`, `module::func::<T>`), which
 /// holds no nested call for `collect_refs` to find.
 fn is_path_callee(callee: Node) -> bool {
@@ -1202,6 +1246,11 @@ fn scan_macro_calls(
 ) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
+        if child.kind() == "identifier" {
+            if let Some(reference) = macro_value_ref(child, source, from, ctx) {
+                out.push(reference);
+            }
+        }
         if matches!(child.kind(), "identifier" | "field_identifier") {
             if let Some(sibling) = child.next_sibling() {
                 if sibling.kind() == "token_tree"
@@ -1225,6 +1274,43 @@ fn scan_macro_calls(
         }
         scan_macro_calls(child, source, from, ctx, out);
     }
+}
+
+/// A name inside a macro's flat tokens that is handed on as a value rather than called —
+/// `format!("{:?}", ids.map(format::render_row))`. The last segment of a `::` path counts
+/// whatever it resolves to (the qualifier is the evidence, as with a call); a bare name
+/// counts only when this file imports or declares it, since a macro's tokens are full of
+/// locals. A name followed by `(` is a call (`scan_macro_calls` has it), one followed by
+/// `::` or `!` is a qualifier or a macro, and one after `.` is a field or method.
+fn macro_value_ref(ident: Node, source: &[u8], from: &str, ctx: &FileContext) -> Option<RefDecl> {
+    let name = ident.utf8_text(source).ok()?;
+    if let Some(next) = ident.next_sibling() {
+        let opens_call =
+            next.kind() == "token_tree" && next.child(0).is_some_and(|c| c.kind() == "(");
+        if opens_call || matches!(next.utf8_text(source), Ok("::" | "!")) {
+            return None;
+        }
+    }
+    let after_path = match ident.prev_sibling().map(|p| p.utf8_text(source)) {
+        Some(Ok(".")) => return None,
+        Some(Ok("::")) => true,
+        _ => false,
+    };
+    let to_target = macro_call_target(ident, source, ctx);
+    if !after_path
+        && !matches!(
+            to_target,
+            RefTarget::Module(_) | RefTarget::ModuleDefault(_)
+        )
+    {
+        return None;
+    }
+    Some(RefDecl {
+        from_qualified_path: from.to_string(),
+        to_name: name.to_string(),
+        kind: EdgeKind::References,
+        to_target,
+    })
 }
 
 const HTTP_VERBS: &[&str] = &["get", "post", "put", "delete", "patch", "head", "options"];

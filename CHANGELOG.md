@@ -17,6 +17,15 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   the file doesn't import or declare, no longer link to a project function that shares
   the member's name.
   ([#18](https://github.com/AncientiCe/impact-rs/issues/18))
+- Rust: a function handed on as a value instead of called — `.map(render_row)` through
+  an import, `let f = render_row;`, or a `module::function` path inside macro arguments
+  such as `format!(..)` — is now reported as a dependent of that function, so
+  `change signature of` lists it next to the direct call sites.
+  ([#20](https://github.com/AncientiCe/impact-rs/issues/20))
+- Rust: paths that start with more than one `super` (`super::super::format::render_row`),
+  in code or in a `use`, now climb one module per `super` instead of resolving to a
+  module that doesn't exist.
+  ([#20](https://github.com/AncientiCe/impact-rs/issues/20))
 
 ## [0.12.5] - 2026-11-10
 

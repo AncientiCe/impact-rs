@@ -1,0 +1,5 @@
+[package]
+name = "rust_fn_value_refs"
+version = "0.1.0"
+edition = "2021"
+publish = false
