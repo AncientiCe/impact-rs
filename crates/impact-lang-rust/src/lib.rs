@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use impact_core::{
@@ -78,6 +78,15 @@ impl LanguageAdapter for RustAdapter {
         let scope = build_scope(ast.tree.root_node(), source, &prefix, &crate_root);
         let field_types = collect_field_types(ast.tree.root_node(), source);
         let binding_types = collect_binding_types(ast.tree.root_node(), source);
+        let mut impl_methods = HashMap::new();
+        let mut declared_fns = HashSet::new();
+        collect_impl_methods(
+            ast.tree.root_node(),
+            source,
+            &prefix,
+            &mut impl_methods,
+            &mut declared_fns,
+        );
         let mut out = Vec::new();
         collect_refs(
             ast.tree.root_node(),
@@ -89,6 +98,8 @@ impl LanguageAdapter for RustAdapter {
                 crate_root,
                 field_types,
                 binding_types,
+                impl_methods,
+                declared_fns,
             },
             &mut out,
         );
@@ -464,6 +475,88 @@ struct FileContext {
     crate_root: String,
     field_types: HashMap<String, String>,
     binding_types: HashMap<String, String>,
+    /// Each method declared in an `impl` block here, by qualified path, mapped to the
+    /// impl's type — what `self` is inside that method.
+    impl_methods: HashMap<String, String>,
+    /// Every function name declared anywhere in this file, which is what a `self.method()`
+    /// resolved against this file's own module can reach.
+    declared_fns: HashSet<String>,
+}
+
+/// Records every `impl` method in the file under the same qualified path `collect_refs`
+/// gives it (the impl's type appended to the enclosing module prefix), together with
+/// every function name declared at all.
+fn collect_impl_methods(
+    node: Node,
+    source: &[u8],
+    prefix: &str,
+    impl_methods: &mut HashMap<String, String>,
+    declared_fns: &mut HashSet<String>,
+) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "function_item" | "function_signature_item" => {
+                if let Some(name) = field_text(child, "name", source) {
+                    declared_fns.insert(name.to_string());
+                }
+                collect_impl_methods(child, source, prefix, impl_methods, declared_fns);
+            }
+            "impl_item" => {
+                if let (Some(type_name), Some(body)) = (
+                    impl_type_name(child, source),
+                    child.child_by_field_name("body"),
+                ) {
+                    let impl_prefix = join_path(prefix, type_name);
+                    let mut inner = body.walk();
+                    for item in body.children(&mut inner) {
+                        if item.kind() != "function_item" {
+                            continue;
+                        }
+                        if let Some(name) = field_text(item, "name", source) {
+                            impl_methods.insert(join_path(&impl_prefix, name), type_name.into());
+                        }
+                    }
+                    collect_impl_methods(body, source, &impl_prefix, impl_methods, declared_fns);
+                }
+            }
+            "mod_item" => {
+                if let (Some(name), Some(body)) = (
+                    field_text(child, "name", source),
+                    child.child_by_field_name("body"),
+                ) {
+                    let mod_prefix = join_path(prefix, name);
+                    collect_impl_methods(body, source, &mod_prefix, impl_methods, declared_fns);
+                }
+            }
+            _ => collect_impl_methods(child, source, prefix, impl_methods, declared_fns),
+        }
+    }
+}
+
+/// `self.method()` where this file declares no `method` at all: Rust lets a type's
+/// inherent methods live in any module of its crate (`impl Session` split across
+/// `session.rs` and `session_auth.rs`), so the call names `Type::method` somewhere in the
+/// crate, not a symbol of this file's own module — which, having none, could only drop
+/// the edge. A file that does declare `method` keeps resolving against itself as before.
+fn self_method_elsewhere(
+    func: Node,
+    name: &str,
+    from: &str,
+    ctx: &FileContext,
+) -> Option<(String, RefTarget)> {
+    let on_self = func.kind() == "field_expression"
+        && func
+            .child_by_field_name("value")
+            .is_some_and(|v| v.kind() == "self");
+    if !on_self || ctx.declared_fns.contains(name) {
+        return None;
+    }
+    let type_name = ctx.impl_methods.get(from)?;
+    Some((
+        format!("{type_name}::{name}"),
+        RefTarget::Module(ctx.crate_root.clone()),
+    ))
 }
 
 /// Collects this file's `use` declarations and top-level item names into a `FileScope`.
@@ -986,11 +1079,13 @@ fn collect_refs(
                     (current_fn, child.child_by_field_name("function"))
                 {
                     if let Some(name) = last_identifier_text(func, source) {
+                        let (to_name, to_target) = self_method_elsewhere(func, name, from, ctx)
+                            .unwrap_or_else(|| (name.to_string(), call_target(func, source, ctx)));
                         out.push(RefDecl {
                             from_qualified_path: from.to_string(),
-                            to_name: name.to_string(),
+                            to_name,
                             kind: EdgeKind::Calls,
-                            to_target: call_target(func, source, ctx),
+                            to_target,
                         });
                     }
                 }

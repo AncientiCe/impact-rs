@@ -26,6 +26,11 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   in code or in a `use`, now climb one module per `super` instead of resolving to a
   module that doesn't exist.
   ([#20](https://github.com/AncientiCe/impact-rs/issues/20))
+- Rust: `self.method()` now reaches a method defined in another module's `impl` block for
+  the same type (`impl Session` split across `session.rs` and `session_auth.rs`), so the
+  calling method is reported as a dependent instead of the call being dropped. The lookup
+  is narrowed to that type, so a same-named method on another type isn't matched.
+  ([#21](https://github.com/AncientiCe/impact-rs/issues/21))
 
 ## [0.12.5] - 2026-11-10
 
