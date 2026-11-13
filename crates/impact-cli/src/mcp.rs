@@ -82,10 +82,10 @@ fn initialize_result(protocol_version: &str) -> Value {
         "protocolVersion": protocol_version,
         "capabilities": {"tools": {}},
         "serverInfo": {"name": "impact", "version": env!("CARGO_PKG_VERSION")},
-        "instructions": "At the start of every session, unconditionally, call impact_index \
-            once with the project root — before you know whether the task will touch code \
-            at all; the other tools are useless against an unindexed project. Then, before \
-            modifying code, call \
+        "instructions": "Don't index up front — read-only and non-code tasks never need \
+            impact. The first time a checkpoint below is about to fire, call impact_index \
+            once with the project root; the other tools are useless against an unindexed \
+            project. Then, before modifying code, call \
             impact_file, impact_change, or impact_diff (given a unified diff) to see what \
             depends on what you're about to change — direct/indirect callers, API routes, \
             event types, database tables, and affected tests. Do that at two checkpoints \

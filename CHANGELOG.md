@@ -4,6 +4,16 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- The installed rule and the MCP server's instructions no longer ask agents to load
+  impact's tools and index at the start of every session. They do it once, right before
+  the first trigger fires (the session's first edit, a commit, or a concrete
+  rename/remove/signature-change proposal), so read-only and non-code sessions skip the
+  tool load, the approval prompt and the index. The first edit is itself a
+  judgment-free checkpoint, so clients that defer MCP tools behind a tool search still
+  load them before they're needed.
+
 ### Fixed
 
 - TypeScript/JavaScript: the trap methods of a handler written inline in `new Proxy(...)`

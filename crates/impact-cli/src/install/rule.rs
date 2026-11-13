@@ -11,12 +11,13 @@ pub const RULE_BODY: &str = r#"# Impact Blast-Radius Protocol — MANDATORY
 **MANDATORY — four hard triggers, every task, no exceptions.**
 
 ## SESSION START
-*Unconditional. Once, when you first start working in a project — before you know
-whether this task will touch code at all.*
-→ Load impact's tools now (if your client hides MCP tools behind a tool search, search
-  for `impact_index` and load them), then call `impact_index` once with the project root.
-→ Do this even when the task looks read-only. A tool you never loaded is not there to
-  reach for when the triggers below fire, and an unindexed project makes them useless.
+*Don't index up front: read-only and non-code tasks never need impact.*
+→ The first time a trigger below is about to fire — the session's first edit, a commit,
+  or a proposal concrete enough to name a rename/remove/signature-change target — load
+  impact's tools (if your client hides MCP tools behind a tool search, search for
+  `impact_index` and load them), then call `impact_index` once with the project root.
+→ The first edit is itself a checkpoint, so the tools are always loaded before they're
+  needed; an unindexed project makes them useless.
 
 ## BEFORE EDITING
 *Two checkpoints that need no judgment call: before the first Edit/Write of a session,

@@ -151,13 +151,13 @@ fn installed_rule_covers_proposing_a_concrete_fix() {
     );
 }
 
-/// Impact's MCP tools are deferred behind a tool search in some clients, so a protocol
-/// whose every trigger is conditional never gets them loaded at all — when a trigger
-/// finally fires there is nothing in the agent's tool set to reach for. The rule
-/// therefore needs one unconditional trigger that loads the tools and indexes the
-/// project up front.
+/// Impact's MCP tools are deferred behind a tool search in some clients, so the rule must
+/// tell the agent to load them and index — but only once a trigger is about to fire.
+/// Indexing every session up front costs read-only and non-code sessions a tool load, an
+/// approval prompt and an index for nothing; the first edit is itself a checkpoint that
+/// needs no judgment call, so loading there still never leaves the agent without tools.
 #[test]
-fn installed_rule_has_an_unconditional_session_start_trigger() {
+fn installed_rule_loads_the_tools_and_indexes_when_the_first_trigger_fires() {
     let home = tempfile::tempdir().unwrap();
 
     install(home.path(), &[]);
@@ -172,8 +172,16 @@ fn installed_rule_has_an_unconditional_session_start_trigger() {
         .next()
         .unwrap_or_default();
     assert!(
-        section.contains("impact_index"),
-        "the session-start trigger should index the project: {rule}"
+        section.contains("impact_index") && section.contains("tool search"),
+        "the session-start section should say how to load the tools and index: {rule}"
+    );
+    assert!(
+        section.contains("first edit") && section.contains("read-only"),
+        "loading should wait for the first trigger and skip read-only tasks: {rule}"
+    );
+    assert!(
+        !section.contains("Unconditional"),
+        "the rule should not index every session up front: {rule}"
     );
 }
 

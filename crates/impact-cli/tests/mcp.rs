@@ -172,12 +172,11 @@ fn initialize_instructions_cover_proposing_a_concrete_fix() {
     );
 }
 
-/// Same reason the installed rule carries a `## SESSION START` trigger: clients that
-/// defer MCP tools behind a tool search never load impact's tools if every trigger is
-/// conditional, so the server's own instructions must ask for an index up front rather
-/// than only once an edit is already in flight.
+/// Same reason as the installed rule's `## SESSION START` section: the server's own
+/// instructions say when to index — once, right before the first trigger fires — so
+/// read-only and non-code sessions don't pay for an index they never use.
 #[test]
-fn initialize_instructions_ask_for_an_index_at_session_start() {
+fn initialize_instructions_ask_for_an_index_before_the_first_trigger() {
     let responses = mcp_round_trip(&[serde_json::json!({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": "2024-11-05"}
@@ -187,8 +186,12 @@ fn initialize_instructions_ask_for_an_index_at_session_start() {
         .as_str()
         .expect("initialize result should have instructions");
     assert!(
-        instructions.contains("session"),
-        "instructions should ask for an index at the start of a session: {instructions}"
+        instructions.contains("impact_index") && instructions.contains("read-only"),
+        "instructions should say when to index and that read-only tasks skip it: {instructions}"
+    );
+    assert!(
+        !instructions.contains("unconditionally"),
+        "instructions should not ask for an index every session: {instructions}"
     );
 }
 
