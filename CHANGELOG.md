@@ -31,6 +31,10 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
   calling method is reported as a dependent instead of the call being dropped. The lookup
   is narrowed to that type, so a same-named method on another type isn't matched.
   ([#21](https://github.com/AncientiCe/impact-rs/issues/21))
+- TypeScript/JavaScript: `Date.now()` and calls on the other built-in globals (`Map`,
+  `Set`, `Error`, `RegExp`, `BigInt`, ...) that a file doesn't import or declare no longer
+  link unrelated modules through a same-named symbol such as `const now = Date.now()`.
+  ([#22](https://github.com/AncientiCe/impact-rs/issues/22))
 
 ## [0.12.5] - 2026-11-10
 

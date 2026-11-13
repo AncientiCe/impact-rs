@@ -889,12 +889,35 @@ fn call_target(callee: Node, source: &[u8], scope: &FileScope) -> RefTarget {
 /// function called `apply`.
 const FUNCTION_PROTOTYPE_INVOKERS: &[&str] = &["apply", "call", "bind"];
 
-/// JavaScript's built-in namespace objects. `Reflect.ownKeys(...)` or `Object.keys(...)`
-/// on one that this file neither imports nor declares is the runtime's, not a project
-/// function that happens to share the member's name.
+/// JavaScript's built-in global objects. `Date.now()`, `Reflect.ownKeys(...)` or
+/// `Object.keys(...)` on one that this file neither imports nor declares is the
+/// runtime's, not a project function — or a `const now = Date.now()` indexed somewhere —
+/// that happens to share the member's name.
 const BUILTIN_NAMESPACES: &[&str] = &[
-    "Reflect", "Object", "Math", "JSON", "Promise", "Array", "Number", "String", "Symbol",
-    "Atomics", "Intl", "console",
+    "Reflect",
+    "Object",
+    "Math",
+    "JSON",
+    "Promise",
+    "Array",
+    "Number",
+    "String",
+    "Symbol",
+    "Atomics",
+    "Intl",
+    "console",
+    "Date",
+    "BigInt",
+    "Boolean",
+    "Error",
+    "RegExp",
+    "Map",
+    "Set",
+    "WeakMap",
+    "WeakSet",
+    "ArrayBuffer",
+    "DataView",
+    "Proxy",
 ];
 
 /// Whether a member-call callee is a JavaScript builtin by its shape alone: an invoker
