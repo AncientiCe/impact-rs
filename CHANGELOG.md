@@ -6,6 +6,15 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ### Fixed
 
+- C++: a preprocessor conditional in the middle of an expression
+  (`if (\n#ifdef A\n x != 1 &&\n#endif\n y)`) no longer hides the rest of the file. The
+  parser can't read a directive inside an expression, and the statement used to swallow
+  the closing braces after it, so every later function in that file lost its symbol and
+  its calls, including calls behind `#ifdef FEATURE`, vanished from the call graph while
+  the report still looked complete. When a file has parse errors, impact now also reads
+  it with every branch of each `#if`/`#ifdef`/`#else` visible and keeps that reading if it
+  has fewer errors. Files that already parse cleanly are unchanged.
+  ([#23](https://github.com/AncientiCe/impact-rs/issues/23))
 - TypeScript/JavaScript: the trap methods of a handler written inline in `new Proxy(...)`
   (`get`, `apply`, ...) are no longer indexed as functions, so untyped `map.get()` or
   `fn.apply()` calls elsewhere in the project no longer resolve to them and list unrelated

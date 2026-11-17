@@ -68,9 +68,26 @@ impl LanguageAdapter for CppAdapter {
     fn parse_file(&self, path: &Path, source: &str) -> anyhow::Result<FileAst> {
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&Self::language())?;
-        let tree = parser
-            .parse(source, None)
-            .ok_or_else(|| anyhow::anyhow!("tree-sitter failed to parse {}", path.display()))?;
+        let mut parse = |text: &str| {
+            parser
+                .parse(text, None)
+                .ok_or_else(|| anyhow::anyhow!("tree-sitter failed to parse {}", path.display()))
+        };
+        let mut tree = parse(source)?;
+        if tree.root_node().has_error() {
+            // A conditional directive in the middle of an expression
+            // (`if (\n#ifdef A\n x && \n#endif\n y)`) can't be parsed without a
+            // preprocessor, and the damage runs on: the statement swallows the closing
+            // braces after it, so later functions in the file lose their symbols and
+            // every call inside them its caller. Reading all branches of every
+            // conditional instead (directive lines blanked in place, so byte offsets and
+            // line numbers don't move) is how a build with each macro defined would see
+            // the file; keep that tree only if it is cleaner than the original.
+            let flattened = parse(&without_conditional_directives(source))?;
+            if error_count(&flattened) < error_count(&tree) {
+                tree = flattened;
+            }
+        }
         Ok(FileAst {
             path: path.to_string_lossy().replace('\\', "/"),
             source: source.to_string(),
@@ -153,6 +170,67 @@ fn find_function_declarator(node: Node) -> Option<Node> {
         return find_function_declarator(node.named_child(0)?);
     }
     None
+}
+
+/// `source` with every preprocessor conditional directive (`#if`, `#ifdef`, `#ifndef`,
+/// `#elif`, `#elifdef`, `#elifndef`, `#else`, `#endif`, plus any backslash-continued
+/// lines) overwritten by spaces. Newlines are kept, so every byte offset and line number
+/// still matches `source`; `#include`/`#define` lines are left alone.
+fn without_conditional_directives(source: &str) -> String {
+    const CONDITIONALS: [&str; 8] = [
+        "if", "ifdef", "ifndef", "elif", "elifdef", "elifndef", "else", "endif",
+    ];
+    let mut out = String::with_capacity(source.len());
+    let mut continued = false;
+    for line in source.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\n', '\r']);
+        let directive = body
+            .trim_start()
+            .strip_prefix('#')
+            .map(|rest| rest.trim_start())
+            .is_some_and(|rest| {
+                let word_end = rest
+                    .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                    .unwrap_or(rest.len());
+                CONDITIONALS.contains(&&rest[..word_end])
+            });
+        if directive || continued {
+            for c in line.chars() {
+                if c == '\n' || c == '\r' {
+                    out.push(c);
+                } else {
+                    // one space per *byte*, so a multi-byte character in a trailing
+                    // comment doesn't shift the offsets after it
+                    out.extend(std::iter::repeat_n(' ', c.len_utf8()));
+                }
+            }
+            continued = body.ends_with('\\');
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+/// The number of `ERROR` and `MISSING` nodes in `tree` — how much of the file
+/// tree-sitter had to guess at.
+fn error_count(tree: &tree_sitter::Tree) -> usize {
+    let mut count = 0;
+    let mut cursor = tree.walk();
+    loop {
+        let node = cursor.node();
+        if node.is_error() || node.is_missing() {
+            count += 1;
+        }
+        if node.has_error() && cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return count;
+            }
+        }
+    }
 }
 
 /// The declared name of a `function_definition`, and whether it's already a full
