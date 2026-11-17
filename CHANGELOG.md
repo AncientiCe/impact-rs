@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.12.6] - 2026-11-17
+
 ### Fixed
 
 - C++: a preprocessor conditional in the middle of an expression
