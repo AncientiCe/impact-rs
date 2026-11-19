@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.12.7] - 2026-11-19
+
 ### Fixed
 
 - TypeScript/JavaScript: a method call on an imported object constant (`store.get()`,
