@@ -885,6 +885,19 @@ fn call_target(callee: Node, source: &[u8], scope: &FileScope) -> RefTarget {
     }
 }
 
+/// The receiver of a member call whose object is a plain identifier: `store` in
+/// `store.get()`. `None` for `this.method()`, a chained receiver (`a.b.c()`, `f().g()`)
+/// or a bare call.
+fn member_call_receiver<'a>(callee: Node, source: &'a [u8]) -> Option<&'a str> {
+    if callee.kind() != "member_expression" {
+        return None;
+    }
+    callee
+        .child_by_field_name("object")
+        .filter(|object| object.kind() == "identifier")
+        .and_then(|object| object.utf8_text(source).ok())
+}
+
 /// `Function.prototype`'s own invokers. `fn.apply(...)` runs `fn`, never a project
 /// function called `apply`.
 const FUNCTION_PROTOTYPE_INVOKERS: &[&str] = &["apply", "call", "bind"];
@@ -1596,6 +1609,21 @@ fn collect_call(
                     from_qualified_path: from.to_string(),
                     to_name: name.to_string(),
                     kind: EdgeKind::Calls,
+                    to_target,
+                });
+            }
+        }
+        // `store.get()` on an imported object constant calls one of its properties, and
+        // only `store` itself is an indexed symbol — the `get` above finds nothing in
+        // `store`'s module. The receiver binding is the dependency, so it gets a
+        // reference of its own, exactly as passing `store` as a value would.
+        if let Some(receiver) = member_call_receiver(func, source) {
+            let to_target = scope.bare(receiver);
+            if !matches!(to_target, RefTarget::Opaque) {
+                out.push(RefDecl {
+                    from_qualified_path: from.to_string(),
+                    to_name: scope.original_name(receiver).to_string(),
+                    kind: EdgeKind::References,
                     to_target,
                 });
             }

@@ -4,6 +4,16 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- TypeScript/JavaScript: a method call on an imported object constant (`store.get()`,
+  `store.update(...)`, where `export const store = { get, set, update }`) now makes the
+  caller a dependent of the module that exports it. The object's properties aren't
+  symbols of their own, so the call used to resolve to nothing, and a module whose
+  callers only used member calls reported an empty blast radius. The receiver binding
+  now gets a reference edge, the same one passing `store` as a value already got.
+  ([#24](https://github.com/AncientiCe/impact-rs/issues/24))
+
 ## [0.12.6] - 2026-11-17
 
 ### Fixed
