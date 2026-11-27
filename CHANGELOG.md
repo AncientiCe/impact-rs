@@ -4,6 +4,8 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.12.8] - 2026-11-27
+
 ### Fixed
 
 - Rust: a fully qualified call to an associated function through a re-exported type
