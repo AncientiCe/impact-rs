@@ -4,6 +4,18 @@ All notable changes to `impact` are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- Rust: a fully qualified call to an associated function through a re-exported type
+  (`store_core::Store::open(..)` with no `use`, where the crate root has
+  `pub use store::*;` or `pub use store::Store;`) now reports the caller. The path
+  names the type at the crate root while the type is declared one module down, and the
+  type segment used to be read as a module, so nothing matched. The type now stays with
+  the function name and still narrows the match: a same-named `Cache::open` in the same
+  crate isn't reached. The same applies to such a path passed as a value
+  (`.map(store_core::Store::open)`).
+  ([#25](https://github.com/AncientiCe/impact-rs/issues/25))
+
 ## [0.12.7] - 2026-11-19
 
 ### Fixed

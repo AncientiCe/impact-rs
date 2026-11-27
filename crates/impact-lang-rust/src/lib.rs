@@ -1079,7 +1079,13 @@ fn collect_refs(
                     (current_fn, child.child_by_field_name("function"))
                 {
                     if let Some(name) = last_identifier_text(func, source) {
+                        let path_qualifier = (func.kind() == "scoped_identifier")
+                            .then(|| func.child_by_field_name("path"))
+                            .flatten();
                         let (to_name, to_target) = self_method_elsewhere(func, name, from, ctx)
+                            .or_else(|| {
+                                path_qualifier.map(|q| type_qualified_ref(q, name, source, ctx))
+                            })
                             .unwrap_or_else(|| (name.to_string(), call_target(func, source, ctx)));
                         out.push(RefDecl {
                             from_qualified_path: from.to_string(),
@@ -1250,14 +1256,42 @@ fn emit_path_ref(path: Node, source: &[u8], from: &str, ctx: &FileContext, out: 
     ) else {
         return;
     };
-    let mut segments = Vec::new();
-    path_segments(qualifier, source, &mut segments);
+    let (to_name, to_target) = type_qualified_ref(qualifier, name, source, ctx);
     out.push(RefDecl {
         from_qualified_path: from.to_string(),
-        to_name: name.to_string(),
+        to_name,
         kind: EdgeKind::References,
-        to_target: qualifier_target(&segments, ctx),
+        to_target,
     });
+}
+
+/// The name and target for a path whose qualifier is `qualifier` and whose last segment
+/// is `name` — `store_core::Store` and `open` for `store_core::Store::open`.
+///
+/// When the qualifier ends in a type (an uppercase segment after at least one module
+/// segment), the type stays with the name (`Store::open`) and only the segments before
+/// it become the module. A path names a type where it's visible, which isn't
+/// necessarily where it's declared: `pub use store::*;` at a crate root lets
+/// `store_core::Store` reach a type indexed under `store_core`'s `store` module, so
+/// reading `Store` as a module segment would demand a module run the declaration's path
+/// doesn't have. The linker matches a type-qualified name anywhere under its module
+/// (see `Resolver::in_module`), which keeps the type as evidence without requiring it
+/// to sit directly in the module the path spells out.
+fn type_qualified_ref(
+    qualifier: Node,
+    name: &str,
+    source: &[u8],
+    ctx: &FileContext,
+) -> (String, RefTarget) {
+    let mut segments = Vec::new();
+    path_segments(qualifier, source, &mut segments);
+    match segments.as_slice() {
+        [module @ .., type_name] if !module.is_empty() && starts_uppercase(type_name) => (
+            format!("{type_name}::{name}"),
+            qualifier_target(module, ctx),
+        ),
+        _ => (name.to_string(), qualifier_target(&segments, ctx)),
+    }
 }
 
 /// Records every type a signature or type expression names as a `References` edge from
